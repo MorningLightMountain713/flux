@@ -23,7 +23,7 @@ import { authenticate, signBtcMessage } from '../auth.js';
 import { appOwnerKey, fluxTeamKey, userKey } from '../framework/keys.js';
 import { buildSeedableApp, buildSeedableUpdate } from '../framework/seed-helper.js';
 import { bootAndPeer } from '../framework/reconciler-suite.js';
-import { handAppMessage } from '../framework/app-delivery.js';
+import { handAppMessages } from '../framework/app-delivery.js';
 import { addressIndexOf, signedMessage } from '../framework/app-payments.js';
 import { partition, healPartition } from '../framework/partition.js';
 import { getSubnetConfig } from '../framework/subnet-config.js';
@@ -37,8 +37,6 @@ const HONEST = [0, 1, 2, 3];
 const LIAR = 4;
 // The joiner: the last index, held back until the log is in place.
 const JOINER = 5;
-// messages handed to each honest peer at once
-const HAND_CONCURRENCY = 20;
 // what each payment is worth: above every fee these specs owe
 const PAYMENT_SAT = 50e8;
 
@@ -155,15 +153,7 @@ describe('a node that joins takes the log in batches and keeps only what the own
     joinerIp = getSubnetConfig().nodeIp(JOINER + 1);
 
     // The honest peers hold the log; each decides each message by its own rules.
-    await Promise.all(HONEST.map(async (peer) => {
-      const next = onChain.map(({ message }) => message);
-      await Promise.all(Array.from({ length: HAND_CONCURRENCY }, async () => {
-        while (next.length) {
-          // eslint-disable-next-line no-await-in-loop
-          await handAppMessage(env, next.shift(), [peer], { timeout: 300000, anyDecision: true });
-        }
-      }));
-    }));
+    await handAppMessages(env, onChain.map(({ message }) => message), HONEST, { anyDecision: true });
     // The lying peer's log, given only now: the honest peers are not missing anything to ask it for.
     const liar = env.stubPeerClients.get(LIAR);
     await liar.loadBatchMessages(onChain.map(({ hash, message }) => lies.get(hash) ?? message));

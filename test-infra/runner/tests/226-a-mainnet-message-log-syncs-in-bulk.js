@@ -29,7 +29,7 @@ import { fileURLToPath } from 'node:url';
 import { gunzipSync } from 'node:zlib';
 import { createTestEnv } from '../framework/test-env.js';
 import { bootAndPeer } from '../framework/reconciler-suite.js';
-import { handAppMessage } from '../framework/app-delivery.js';
+import { handAppMessages } from '../framework/app-delivery.js';
 import { waitForDaemonReady, waitForOrchestratorState, waitFor } from '../framework/wait.js';
 import { setSystemSecure, stopTicker } from '../framework/daemon-control.js';
 import { getSubnetConfig } from '../framework/subnet-config.js';
@@ -41,8 +41,6 @@ import { Chain, expiresAtHeightFor } from '@runonflux/flux-spec';
 const FIXTURE = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'fixtures', 'mainnet-message-slice');
 const JOINER = 3;
 const PEERS = [0, 1, 2];
-// messages handed to each peer at once
-const HAND_CONCURRENCY = 20;
 
 const readLines = (file) => gunzipSync(readFileSync(join(FIXTURE, file))).toString().trim().split('\n').map((line) => JSON.parse(line));
 
@@ -101,16 +99,7 @@ describe('a node that joins takes a slice of the mainnet message log in bulk', f
     await stopTicker();
 
     // Each peer decides each message by its own rules; the joiner is what this suite judges.
-    const queue = messages.map(signedMessage);
-    await Promise.all(PEERS.map(async (peer) => {
-      const next = [...queue];
-      await Promise.all(Array.from({ length: HAND_CONCURRENCY }, async () => {
-        while (next.length) {
-          // eslint-disable-next-line no-await-in-loop
-          await handAppMessage(env, next.shift(), [peer], { timeout: 300000, anyDecision: true });
-        }
-      }));
-    }));
+    await handAppMessages(env, messages.map(signedMessage), PEERS, { anyDecision: true });
     await setSystemSecure(getSubnetConfig().nodeIp(JOINER + 1), false);
 
     const joiner = await env.startNode(JOINER);

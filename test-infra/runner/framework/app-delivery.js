@@ -3,6 +3,9 @@
 // records the payment from its own scan, stores the message, decides it and
 // lists the app. Nothing is written into a node's database.
 import { advanceBlock, queueAppTx } from './daemon-control.js';
+import { dbClient } from './db-client.js';
+import { partition, healPartition } from './partition.js';
+import { getSubnetConfig } from './subnet-config.js';
 import { waitFor } from './wait.js';
 
 // The messages this process has had paid for, by hash: a message is paid for
@@ -89,4 +92,91 @@ export async function handAppMessage(env, message, indices, { timeout = 120000, 
 export async function deliverAppMessage(env, message, indices, { valueSat, timeout = 120000 } = {}) {
   await pay(message, valueSat);
   await handAppMessage(env, message, indices, { timeout });
+}
+
+/**
+ * Hands each of the given nodes every message of a log whose payments the chain
+ * already carries, `concurrency` messages to a node at once.
+ *
+ * @param {object} env - the test environment
+ * @param {object[]} messages - the messages as signed
+ * @param {number[]} indices - the nodes to hand them to
+ * @param {{concurrency?: number, anyDecision?: boolean, timeout?: number}} [options]
+ */
+export async function handAppMessages(env, messages, indices, { concurrency = 20, anyDecision = false, timeout = 300000 } = {}) {
+  await Promise.all(indices.map(async (index) => {
+    const next = [...messages];
+    await Promise.all(Array.from({ length: concurrency }, async () => {
+      while (next.length) {
+        // eslint-disable-next-line no-await-in-loop
+        await handAppMessage(env, next.shift(), [index], { timeout, anyDecision });
+      }
+    }));
+  }));
+}
+
+/**
+ * Waits until each of the given nodes has applied every message. A node decides
+ * a message when it is handed it, and decides it again when an earlier message
+ * of its app arrives: an update handed before its registration is refused at
+ * first and applied once the registration lands.
+ *
+ * @param {object} env - the test environment
+ * @param {object[]} messages - the messages as signed
+ * @param {number[]} indices - the nodes
+ * @param {{timeout?: number}} [options]
+ */
+export async function awaitApplied(env, messages, indices, { timeout = 300000 } = {}) {
+  await Promise.all(indices.map(async (index) => {
+    const client = env.clients[index];
+    let pending = messages.map((message) => message.hash);
+    await waitFor(async () => {
+      const still = [];
+      for (let i = 0; i < pending.length; i += 50) {
+        // eslint-disable-next-line no-await-in-loop
+        const answers = await Promise.all(pending.slice(i, i + 50).map(async (hash) => {
+          const { status, data } = await client.request('GET', `/v2/apps/messages/${hash}/decision`);
+          return status === 200 && data.data.decision === 'applied' ? null : hash;
+        }));
+        still.push(...answers.filter(Boolean));
+      }
+      pending = still;
+      return pending.length === 0;
+    }, { timeout, interval: 5000, label: `node ${index} applies every message (${pending.length} not yet)` });
+  }));
+}
+
+/**
+ * Messages a running node missed: while it is cut off from the fleet (its chain
+ * feed kept), their payments are mined in one block, in the order given, and the
+ * node's scan records them; the peers are handed the messages and announce them
+ * to everyone but it. Then it reaches the fleet again and holds a peer. No other
+ * block is mined, so its hash sync has failed to find the messages once and asks
+ * again at the next block, which the caller mines. The ticker must be stopped.
+ *
+ * @param {object} env - the test environment
+ * @param {object[]} messages - the messages as signed, in chain order
+ * @param {{cutOff: number, peers: number[]}} nodes - the node that misses them, and
+ *   the nodes handed them
+ */
+export async function deliverWhileCutOff(env, messages, { cutOff, peers }) {
+  const node = env.clients[cutOff];
+  await partition(env, [cutOff], { cutChain: false });
+  for (const message of messages) {
+    // eslint-disable-next-line no-await-in-loop
+    await queueAppTx(message.hash);
+    paid.add(message.hash);
+  }
+  await advanceBlock();
+  const hashes = messages.map((message) => message.hash);
+  await waitFor(async () => (await dbClient(cutOff + 1).appMessages({ hash: { $in: hashes }, paid: true })).length === hashes.length, {
+    timeout: 120000, interval: 2000, label: `node ${cutOff} records the payments of ${hashes.length} messages`,
+  });
+  await handAppMessages(env, messages, peers, { anyDecision: true });
+  await awaitApplied(env, messages, peers);
+  await healPartition(env, [cutOff]);
+  const peerIps = new Set(peers.map((i) => getSubnetConfig().nodeIp(i + 1)));
+  const mark = node.getLastEventId();
+  await env.startDiscovery([cutOff]);
+  await node.waitForEvent('peers:added', (d) => peerIps.has(d.ip), 300000, { afterId: mark });
 }
