@@ -613,25 +613,34 @@ async function handleRequestMessageHash(messageHash, peerSocket) {
  */
 async function handleAppRunningMessage(message, fromIP, port, announcer = null) {
   try {
-    // Whether this told us anything new is the event log's answer, not the claim
-    // release's: the log is what holds the node's running state, so it is what knows
-    // if this announcement moved it. An announcement that advances nothing stops here
-    // rather than being passed on.
-    const { isNewer } = await messageStore.storeAppStateEvent(
+    // A malformed message is refused where it arrives: stored nowhere, relayed nowhere.
+    const released = await messageStore.releaseInstallingClaims(message.data);
+    if (released instanceof Error) {
+      log.warn(`handleAppRunningMessage - not stored, from ${fromIP}:${port} for ${message.data?.ip}: ${released.message}`);
+      return;
+    }
+    // Whether this told us anything new is the event log's answer: the log is what
+    // holds the node's running state, so it is what knows if this announcement moved
+    // it. An announcement that advances nothing stops here rather than being passed on.
+    const {
+      isNewer, written, refused, cleared,
+    } = await messageStore.storeAppStateEvent(
       messageStore.APP_STATE_EVENT_TYPES.APPRUNNING,
       { signedBroadcast: message, announcer },
     );
-    const released = await messageStore.releaseInstallingClaims(message.data);
-    if (released instanceof Error) {
-      log.warn(`handleAppRunningMessage - claims not released, from ${fromIP}:${port} for ${message.data?.ip}: ${released.message}`);
-    }
-    if (isNewer) {
-      fluxEventBus.publish('network:apprunning', { ip: message.data.ip, apps: message.data.apps || [{ name: message.data.name }] });
-    }
     const currentTimeStamp = Date.now();
     const timestampOK = fluxCommunicationUtils.verifyTimestampInFluxBroadcast(message, currentTimeStamp, 240_000);
-    if (isNewer && timestampOK) {
+    const relayed = Boolean(isNewer && timestampOK);
+    if (relayed) {
       announceToPeers(message, `${fromIP}:${port}`);
+    }
+    // Everything this node did with the message: the entries it wrote, the names it
+    // refused, whether it cleared the sender's rows, and whether it passed it on. A
+    // message that did none of these, such as an older one arriving late, publishes nothing.
+    if (written.length || refused.length || cleared || relayed) {
+      fluxEventBus.publish('network:apprunning', {
+        ip: message.data.ip, apps: written, refused, cleared, relayed,
+      });
     }
   } catch (error) {
     log.error(error);

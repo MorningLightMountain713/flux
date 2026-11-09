@@ -447,7 +447,9 @@ describe('fluxCommunication tests', () => {
     it('should broadcast the app message if a proper data is given', async () => {
       // relay is gated on the event log saying the announcement was news
       sinon.stub(messageStore, 'releaseInstallingClaims').resolves({ released: 0 });
-      sinon.stub(messageStore, 'storeAppStateEvent').resolves({ isNewer: true });
+      sinon.stub(messageStore, 'storeAppStateEvent').resolves({
+        isNewer: true, written: [], refused: [], cleared: false,
+      });
       const fromIp = '127.0.0.5';
       const port = '16127';
       const type = 'fluxappregister';
@@ -531,11 +533,15 @@ describe('fluxCommunication tests', () => {
     });
     const apprunningPublished = (publish) => publish.getCalls().filter((call) => call.args[0] === 'network:apprunning');
 
-    it('publishes nothing for a message that wrote, refused, cleared and relayed nothing', async () => {
-      sinon.stub(messageStore, 'storeAppRunningMessage').resolves({
-        stored: false, rebroadcast: false, written: [], refused: [], cleared: false,
+    const stored = (outcome) => {
+      sinon.stub(messageStore, 'releaseInstallingClaims').resolves({ released: 0 });
+      return sinon.stub(messageStore, 'storeAppStateEvent').resolves({
+        isNewer: false, written: [], refused: [], cleared: false, ...outcome,
       });
-      sinon.stub(messageStore, 'storeAppStateEvent');
+    };
+
+    it('publishes nothing for a message that wrote, refused, cleared and relayed nothing', async () => {
+      stored({});
       const publish = sinon.stub(fluxEventBus, 'publish');
 
       await fluxCommunication.handleAppRunningMessage(runningMessage(), '127.0.0.5', '16127');
@@ -544,10 +550,7 @@ describe('fluxCommunication tests', () => {
     });
 
     it('publishes the names it refused, though it wrote and relayed nothing', async () => {
-      sinon.stub(messageStore, 'storeAppRunningMessage').resolves({
-        stored: false, rebroadcast: false, written: [], refused: ['unhashed'], cleared: false,
-      });
-      sinon.stub(messageStore, 'storeAppStateEvent');
+      stored({ refused: ['unhashed'] });
       const publish = sinon.stub(fluxEventBus, 'publish');
 
       await fluxCommunication.handleAppRunningMessage(runningMessage(), '127.0.0.5', '16127');
@@ -558,11 +561,38 @@ describe('fluxCommunication tests', () => {
       });
     });
 
+    it('publishes the entries it wrote and that it relayed the message', async () => {
+      const entry = { name: 'myApp', hash: 'myapphash' };
+      stored({ isNewer: true, written: [entry], refused: ['unhashed'] });
+      const publish = sinon.stub(fluxEventBus, 'publish');
+
+      await fluxCommunication.handleAppRunningMessage(runningMessage(), '127.0.0.5', '16127');
+
+      sinon.assert.calledOnce(announceSpy);
+      const [call] = apprunningPublished(publish);
+      expect(call.args[1]).to.deep.equal({
+        ip: '203.0.113.31:16127', apps: [entry], refused: ['unhashed'], cleared: false, relayed: true,
+      });
+    });
+
+    it('publishes that it cleared the sender\'s rows', async () => {
+      stored({ isNewer: true, cleared: true });
+      const publish = sinon.stub(fluxEventBus, 'publish');
+      const message = runningMessage();
+      message.data.apps = [];
+
+      await fluxCommunication.handleAppRunningMessage(message, '127.0.0.5', '16127');
+
+      const [call] = apprunningPublished(publish);
+      expect(call.args[1]).to.deep.equal({
+        ip: '203.0.113.31:16127', apps: [], refused: [], cleared: true, relayed: true,
+      });
+    });
+
     // A refused message is logged where it arrived, and goes no further.
-    it('logs a message its store refuses, and does not relay it', async () => {
-      const broadcastHashSpy = sinon.stub(peerManager, 'broadcastHash');
-      sinon.stub(messageStore, 'storeAppRunningMessage').resolves(new Error('Invalid Flux App Running message for storing'));
-      sinon.stub(messageStore, 'storeAppStateEvent');
+    it('logs a message its store refuses, and neither stores nor relays it', async () => {
+      sinon.stub(messageStore, 'releaseInstallingClaims').resolves(new Error('Invalid Flux App Running message for storing'));
+      const storeEvent = sinon.stub(messageStore, 'storeAppStateEvent');
       const warn = sinon.stub(log, 'warn');
       const fromIp = '127.0.0.5';
       const port = '16127';
@@ -575,7 +605,8 @@ describe('fluxCommunication tests', () => {
 
       await fluxCommunication.handleAppRunningMessage(message, fromIp, port);
 
-      sinon.assert.notCalled(broadcastHashSpy);
+      sinon.assert.notCalled(storeEvent);
+      sinon.assert.notCalled(announceSpy);
       sinon.assert.calledWithMatch(warn, /handleAppRunningMessage - not stored, from 127\.0\.0\.5:16127 for 203\.0\.113\.30:16127: Invalid Flux App Running message for storing/);
     });
   });
@@ -1713,7 +1744,9 @@ describe('fluxCommunication tests', () => {
         sinon.stub(fluxCommunicationUtils, 'verifyTimestampInFluxBroadcast').returns(true);
         // the announcement is recorded on the event log (37376a976); the log's
         // answer is what gates the relay, and this one advances nothing
-        const storeAppStateEventStub = sinon.stub(messageStore, 'storeAppStateEvent').resolves({ isNewer: false });
+        const storeAppStateEventStub = sinon.stub(messageStore, 'storeAppStateEvent').resolves({
+          isNewer: false, written: [], refused: [], cleared: false,
+        });
         sinon.stub(messageStore, 'releaseInstallingClaims').resolves({ released: 0 });
         daemonStatusStub.returns({
           data:
@@ -3435,7 +3468,9 @@ describe('the dispatcher hands each type to the handler the route table declares
   // The announcer is resolved once, by the signature check, and the event log records it.
   ['fluxapprunning', 'fluxmasterlease', 'fluxnodealive'].forEach((type) => {
     it(`hands ${type} the announcer its signature check resolved`, async () => {
-      const store = sinon.stub(messageStore, 'storeAppStateEvent').resolves({ isNewer: false });
+      const store = sinon.stub(messageStore, 'storeAppStateEvent').resolves({
+        isNewer: false, written: [], refused: [], cleared: false,
+      });
       sinon.stub(messageStore, 'releaseInstallingClaims').resolves({ released: 0 });
       await peerManager.messageDispatcher(signed({ type, name: `app-${type}`, ip: '50.50.50.50:16127' }), makeSocket());
       await settle();
@@ -3615,7 +3650,9 @@ describe('a relayed broadcast is handed to the peer that asks for it', () => {
   const handlers = [
     ['fluxapptemp', () => sinon.stub(messageStore, 'storeAppTemporaryMessage').resolves({ rebroadcast: true }), fluxCommunication.handleAppMessages],
     ['fluxapprunning', () => {
-      sinon.stub(messageStore, 'storeAppStateEvent').resolves({ isNewer: true });
+      sinon.stub(messageStore, 'storeAppStateEvent').resolves({
+        isNewer: true, written: [], refused: [], cleared: false,
+      });
       sinon.stub(messageStore, 'releaseInstallingClaims').resolves({ released: 0 });
     }, fluxCommunication.handleAppRunningMessage],
     ['fluxappinstalling', () => {

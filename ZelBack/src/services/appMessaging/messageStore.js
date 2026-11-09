@@ -743,21 +743,36 @@ function namesOnlyRefusedApps(data) {
  * count is true even for a stale message and would have every node relaying every
  * echo forever.
  *
- * @returns {Promise<{isNewer: boolean}>}
+ * Also reports what the message did here: `written`, the entries it made locations of
+ * (none unless it is news); `refused`, the names of the entries no location is made
+ * of; and `cleared`, whether it is a version 2 message naming no apps that took the
+ * place of the sender's last announcement.
+ *
+ * @returns {Promise<{isNewer: boolean, written: Array<object>, refused: Array<*>, cleared: boolean}>}
  */
 async function handleAppRunningEvent({ signedBroadcast, announcer = null }) {
+  const { data } = signedBroadcast;
+  const judged = data && data.version === 2 && Array.isArray(data.apps)
+    ? appRunningEntries(data.apps)
+    : { stored: data && typeof data.name === 'string' && typeof data.hash === 'string' ? [{ name: data.name, hash: data.hash }] : [], refused: [] };
+  const refused = judged.refused.map((app) => app?.name ?? null);
+  const outcome = (isNewer) => ({
+    isNewer,
+    written: isNewer ? judged.stored : [],
+    refused,
+    cleared: isNewer && data.version === 2 && Array.isArray(data.apps) && data.apps.length === 0,
+  });
   try {
-    const { data } = signedBroadcast;
-    if (!data || !data.ip || !data.broadcastedAt) return { isNewer: false };
-    if (!broadcastedAtUsable(data.broadcastedAt, GOSSIP_VALIDITY_MS)) return { isNewer: false };
-    if (namesOnlyRefusedApps(data)) return { isNewer: false };
+    if (!data || !data.ip || !data.broadcastedAt) return outcome(false);
+    if (!broadcastedAtUsable(data.broadcastedAt, GOSSIP_VALIDITY_MS)) return outcome(false);
+    if (namesOnlyRefusedApps(data)) return outcome(false);
 
     const db = dbHelper.databaseConnection();
     const database = db.db(config.get('database.appsglobal.database'));
 
     if (data.version === 2 && (!data.apps || data.apps.length === 0)) {
       const existing = await database.collection(globalAppStateEvents).findOne({ ip: data.ip, type: APP_STATE_EVENT_TYPES.APPRUNNING });
-      if (!existing) return { isNewer: false };
+      if (!existing) return outcome(false);
     }
 
     const dedupKey = data.apps ? 'v2' : `v1:${data.name}`;
@@ -778,10 +793,10 @@ async function handleAppRunningEvent({ signedBroadcast, announcer = null }) {
 
     // No prior document means we had nothing for this node: everything is news.
     const priorAt = prior && prior.broadcastedAt ? new Date(prior.broadcastedAt).getTime() : 0;
-    return { isNewer: data.broadcastedAt > priorAt };
+    return outcome(data.broadcastedAt > priorAt);
   } catch (err) {
     log.error(`storeAppStateEvent(apprunning): ${err.message}`);
-    return { isNewer: false };
+    return outcome(false);
   }
 }
 

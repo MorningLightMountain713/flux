@@ -484,6 +484,10 @@ function buildAppLocationPipeline({
     },
     { $unwind: '$_v2Filtered' },
     { $unwind: '$_v2Filtered.apps' },
+    // An entry is a location only with a string name and a string hash
+    // (appRunningEntries). The stored message keeps every entry its sender signed,
+    // so the rest of its entries stand without the ones that fail.
+    { $match: { '_v2Filtered.apps.name': { $type: 'string' }, '_v2Filtered.apps.hash': { $type: 'string' } } },
     ...(nameMatch ? [{ $match: { '_v2Filtered.apps.name': nameMatch } }] : []),
     ...(excludeHashes.length ? [{ $match: { '_v2Filtered.apps.hash': { $nin: excludeHashes } } }] : []),
     // An app the node has since reported removed is gone even though its announcement

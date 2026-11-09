@@ -1952,7 +1952,9 @@ describe('messageStore tests', () => {
       const announcement = (broadcastedAt) => ({
         signedBroadcast: {
           version: 1, timestamp: Date.now(), pubKey: 'pk', signature: 'sig',
-          data: { ip: '1.2.3.4', broadcastedAt, apps: [{ name: 'a', hash: 'h' }] },
+          data: {
+            type: 'fluxapprunning', version: 2, ip: '1.2.3.4', broadcastedAt, apps: [{ name: 'a', hash: 'h' }],
+          },
         },
       });
 
@@ -1963,7 +1965,9 @@ describe('messageStore tests', () => {
           messageStore.APP_STATE_EVENT_TYPES.APPRUNNING, announcement(Date.now()),
         );
 
-        expect(result).to.deep.equal({ isNewer: true });
+        expect(result).to.deep.equal({
+          isNewer: true, written: [{ name: 'a', hash: 'h' }], refused: [], cleared: false,
+        });
       });
 
       it('is news when it advances the stored announcement', async () => {
@@ -1974,7 +1978,9 @@ describe('messageStore tests', () => {
           messageStore.APP_STATE_EVENT_TYPES.APPRUNNING, announcement(now),
         );
 
-        expect(result).to.deep.equal({ isNewer: true });
+        expect(result).to.deep.equal({
+          isNewer: true, written: [{ name: 'a', hash: 'h' }], refused: [], cleared: false,
+        });
       });
 
       it('is NOT news when an older announcement arrives late', async () => {
@@ -1985,7 +1991,9 @@ describe('messageStore tests', () => {
           messageStore.APP_STATE_EVENT_TYPES.APPRUNNING, announcement(now - 60_000),
         );
 
-        expect(result).to.deep.equal({ isNewer: false });
+        expect(result).to.deep.equal({
+          isNewer: false, written: [], refused: [], cleared: false,
+        });
       });
 
       it('is NOT news when the same announcement is seen again', async () => {
@@ -1996,7 +2004,88 @@ describe('messageStore tests', () => {
           messageStore.APP_STATE_EVENT_TYPES.APPRUNNING, announcement(now),
         );
 
-        expect(result).to.deep.equal({ isNewer: false });
+        expect(result).to.deep.equal({
+          isNewer: false, written: [], refused: [], cleared: false,
+        });
+      });
+    });
+
+    // What a message did here, which the handler publishes: the entries it made
+    // locations of, the names it refused, and whether it cleared the sender's rows.
+    describe('what an announcement did', () => {
+      const announcement = (broadcastedAt, data) => ({
+        signedBroadcast: {
+          version: 1, timestamp: Date.now(), pubKey: 'pk', signature: 'sig',
+          data: {
+            type: 'fluxapprunning', version: 2, ip: '1.2.3.4:16127', broadcastedAt, ...data,
+          },
+        },
+      });
+
+      it('writes the entries with a name and hash and refuses the rest by name', async () => {
+        dbHelperStub.findOneAndUpdateInDatabase.resolves(null);
+
+        const result = await messageStore.storeAppStateEvent(
+          messageStore.APP_STATE_EVENT_TYPES.APPRUNNING,
+          announcement(Date.now(), { apps: [{ name: 'kept', hash: 'h' }, { name: 'unhashed' }, null] }),
+        );
+
+        expect(result).to.deep.equal({
+          isNewer: true, written: [{ name: 'kept', hash: 'h' }], refused: ['unhashed', null], cleared: false,
+        });
+      });
+
+      it('writes nothing of an announcement that is not news, and still names what it refused', async () => {
+        const now = Date.now();
+        dbHelperStub.findOneAndUpdateInDatabase.resolves({ broadcastedAt: new Date(now) });
+
+        const result = await messageStore.storeAppStateEvent(
+          messageStore.APP_STATE_EVENT_TYPES.APPRUNNING,
+          announcement(now - 60_000, { apps: [{ name: 'kept', hash: 'h' }, { name: 'unhashed' }] }),
+        );
+
+        expect(result).to.deep.equal({
+          isNewer: false, written: [], refused: ['unhashed'], cleared: false,
+        });
+      });
+
+      it('stores nothing of an announcement whose every entry is refused', async () => {
+        const result = await messageStore.storeAppStateEvent(
+          messageStore.APP_STATE_EVENT_TYPES.APPRUNNING,
+          announcement(Date.now(), { apps: [{ name: 'unhashed' }] }),
+        );
+
+        expect(result).to.deep.equal({
+          isNewer: false, written: [], refused: ['unhashed'], cleared: false,
+        });
+        sinon.assert.notCalled(dbHelperStub.findOneAndUpdateInDatabase);
+      });
+
+      it('clears the sender\'s rows with an announcement naming no apps', async () => {
+        const now = Date.now();
+        collectionStub.findOne = sinon.stub().resolves({ ip: '1.2.3.4:16127' });
+        dbHelperStub.findOneAndUpdateInDatabase.resolves({ broadcastedAt: new Date(now - 60_000) });
+
+        const result = await messageStore.storeAppStateEvent(
+          messageStore.APP_STATE_EVENT_TYPES.APPRUNNING, announcement(now, { apps: [] }),
+        );
+
+        expect(result).to.deep.equal({
+          isNewer: true, written: [], refused: [], cleared: true,
+        });
+      });
+
+      it('writes the one app of a version 1 announcement', async () => {
+        dbHelperStub.findOneAndUpdateInDatabase.resolves(null);
+
+        const result = await messageStore.storeAppStateEvent(
+          messageStore.APP_STATE_EVENT_TYPES.APPRUNNING,
+          announcement(Date.now(), { version: 1, name: 'one', hash: 'h1' }),
+        );
+
+        expect(result).to.deep.equal({
+          isNewer: true, written: [{ name: 'one', hash: 'h1' }], refused: [], cleared: false,
+        });
       });
     });
 

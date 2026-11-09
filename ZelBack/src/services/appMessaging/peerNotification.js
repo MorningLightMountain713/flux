@@ -18,6 +18,7 @@ const { resolveRegisteredSpec } = require('../utils/specCutover');
 const fluxEventBus = require('../utils/fluxEventBus');
 const { nodeSigner } = require('../utils/nodeSigner');
 const { ANNOUNCE_INTERVAL_MS } = require('../utils/appConstants');
+const { appRunningEntries } = require('../utils/appRunningEntries');
 
 
 let broadcastTimer = null;
@@ -257,9 +258,17 @@ async function checkAndNotifyPeersOfRunningApps() {
     // So is an app boot has not yet confirmed this node still holds: naming it would
     // renew a location record that may have expired, and the boot check would then
     // read it as valid.
-    const applicationsToBroadcast = hostedInstances.filter(
+    const heldHere = hostedInstances.filter(
       (inst) => !globalState.departingApps.has(inst.name) && !globalState.unconfirmedApps.has(inst.name),
     );
+    // An instance without a string name and hash is left out and logged: no node
+    // stores such an entry, and a node that judges the whole message refuses it
+    // for one, which would cost this node every other app it holds.
+    const { stored: applicationsToBroadcast, refused: unannounceable } = appRunningEntries(heldHere);
+    const unannounced = unannounceable.map((inst) => inst?.name ?? null);
+    if (unannounced.length) {
+      log.warn(`checkAndNotifyPeersOfRunningApps - installed apps without a name and hash are not announced: ${unannounced.join(', ')}`);
+    }
     const mesh = await meshBroadcast.meshBroadcastFields(
       applicationsToBroadcast.filter((inst) => resolvedViews.has(inst.name)),
       resolvedViews,
@@ -284,7 +293,7 @@ async function checkAndNotifyPeersOfRunningApps() {
           const runningOnMyNodeSince = await placementDates.announcedSince(appName, identity, localSocketAddr);
           apps.push({
             name: appName,
-            hash: application.hash || '',
+            hash: application.hash,
             runningSince: runningOnMyNodeSince,
             state: globalState.getAppShutdownPipelineState(appName) ?? 'active',
             ...(identity != null ? { replica: identity } : {}),
@@ -322,10 +331,17 @@ async function checkAndNotifyPeersOfRunningApps() {
         log.warn('checkAndNotifyPeersOfRunningApps - this node cannot sign as itself; its running apps are not announced');
         return;
       }
-      await messageStore.releaseInstallingClaims(appRunningMessage);
+      // Every peer applies the same rule to the message as this node does, so a
+      // message this node refuses is one no peer stores either.
+      const released = await messageStore.releaseInstallingClaims(appRunningMessage);
+      if (released instanceof Error) {
+        log.error(`checkAndNotifyPeersOfRunningApps - this node refuses its own announcement, not broadcast: ${released.message}`);
+        fluxEventBus.publish('app:announcementRefused', { reason: released.message });
+        return;
+      }
       const signed = await fluxCommunicationMessagesSender.broadcastMessageToAll(appRunningMessage);
       await messageStore.storeAppStateEvent(messageStore.APP_STATE_EVENT_TYPES.APPRUNNING, { signedBroadcast: signed });
-      fluxEventBus.publish('app:running', { apps, ip: appRunningMessage.ip });
+      fluxEventBus.publish('app:running', { apps, ip: appRunningMessage.ip, unannounced });
       log.info(`App Running Message broadcasted: ${apps.length} apps`);
     } catch (err) {
       log.error(err);

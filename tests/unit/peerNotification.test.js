@@ -275,6 +275,42 @@ describe('peerNotification tests', () => {
       expect(broadcastAllStub.called, 'sent an announcement').to.equal(false);
     });
 
+    // No node stores an entry without a string name and hash, and a node that judges
+    // the whole message refuses it for one: such an instance is left out and named.
+    it('leaves out an instance with no hash and says it did', async () => {
+      const stubs = moduleStubs();
+      peerNotification = proxyquire('../../ZelBack/src/services/appMessaging/peerNotification', stubs);
+      listInstalledAppsStub.resolves([
+        await installedRow(await v9Spec({ name: 'app1' })),
+        (await loadSpecLibrary()).RegisteredSpec.fromEvent({
+          spec: await v9Spec({ name: 'unhashed' }), hash: undefined, height: 2_500_000, identity: APP_IDENTITY, uuid: APP_UUID,
+        }),
+      ]);
+
+      await peerNotification.checkAndNotifyPeersOfRunningApps();
+
+      const { apps } = broadcastAllStub.firstCall.args[0];
+      expect(apps.map((app) => app.name), 'announced an instance with no hash').to.deep.equal(['app1']);
+      expect(apps[0].hash).to.equal(APP_HASH);
+      const running = stubs['../utils/fluxEventBus'].publish.getCalls().find((call) => call.args[0] === 'app:running');
+      expect(running.args[1].unannounced).to.deep.equal(['unhashed']);
+      sinon.assert.calledWithMatch(logStub.warn, /installed apps without a name and hash are not announced: unhashed/);
+    });
+
+    it('sends nothing this node refuses itself', async () => {
+      const stubs = moduleStubs();
+      stubs['./messageStore'].releaseInstallingClaims = sinon.stub().resolves(new Error('Invalid Flux App Running message: apps array exceeds maxAppsPerNode'));
+      peerNotification = proxyquire('../../ZelBack/src/services/appMessaging/peerNotification', stubs);
+
+      await peerNotification.checkAndNotifyPeersOfRunningApps();
+
+      expect(broadcastAllStub.called, 'sent an announcement it refuses').to.equal(false);
+      sinon.assert.notCalled(stubs['./messageStore'].storeAppStateEvent);
+      sinon.assert.calledWith(stubs['../utils/fluxEventBus'].publish, 'app:announcementRefused', {
+        reason: 'Invalid Flux App Running message: apps array exceeds maxAppsPerNode',
+      });
+    });
+
     // THE ANNOUNCEMENT IS A CLAIM, NOT A HEALTH REPORT, and a whole snapshot: an app it
     // leaves out is released at every peer. One this node cannot decrypt this cycle is
     // still held here, so it is still named - only the mesh fields, which need its
