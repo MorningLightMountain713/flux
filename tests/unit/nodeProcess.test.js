@@ -36,6 +36,7 @@ describe('nodeProcess', () => {
       publish: sinon.stub(),
       drainFoldersToPeers: sinon.stub().resolves([]),
       pauseAllFolders: sinon.stub().resolves({ paused: [], failed: [] }),
+      whenNoneHeldOfType: sinon.stub().resolves(),
     };
     nodeProcess = proxyquire('../../ZelBack/src/services/nodeProcess', {
       'node:fs': { existsSync: stubs.existsSync },
@@ -63,6 +64,7 @@ describe('nodeProcess', () => {
       './utils/FluxPeerManager': { peerManager: { closeAllForStop: stubs.closeAllForStop } },
       './utils/FluxPeerSocket': { CLOSE_CODES },
       './utils/verifyPool': { stop: stubs.verifyPoolStop },
+      './utils/operationRegistry': { whenNoneHeldOfType: stubs.whenNoneHeldOfType },
       './appMessaging/releasedFleetSigterm': { announceShutdown: stubs.announceShutdown },
       './utils/processIdentity': { stopStatement: stubs.stopStatement },
       './utils/nodeDownCertificates': { DROP_REASON: { RESTART: 'restart', SHUTDOWN: 'shutdown' } },
@@ -237,6 +239,37 @@ describe('nodeProcess', () => {
         sinon.assert.calledOnceWithExactly(exit, 0);
       });
 
+      it('waits for the container starts in flight, then lists the containers once', async () => {
+        let startsDone;
+        stubs.whenNoneHeldOfType.returns(new Promise((resolve) => { startsDone = resolve; }));
+        stubs.dockerListContainers.resolves([{ Names: ['/fluxweb_app1'] }]);
+
+        const done = nodeProcess.handleSigterm();
+        await new Promise((resolve) => { setImmediate(resolve); });
+        await new Promise((resolve) => { setImmediate(resolve); });
+
+        sinon.assert.calledOnceWithExactly(stubs.whenNoneHeldOfType, 'actuating', 'stopping');
+        sinon.assert.notCalled(stubs.dockerListContainers);
+        startsDone();
+        await done;
+        sinon.assert.calledOnce(stubs.dockerListContainers);
+        sinon.assert.calledOnceWithExactly(stubs.appDockerStop, 'fluxweb_app1', 9);
+      });
+
+      it('stops what is running when the starts in flight outlast the budget', async () => {
+        const clock = sinon.useFakeTimers();
+        stubs.whenNoneHeldOfType.returns(new Promise(() => {}));
+        stubs.dockerListContainers.resolves([{ Names: ['/fluxweb_app1'] }]);
+
+        const done = nodeProcess.handleSigterm();
+        await clock.tickAsync(PM2_KILL_TIMEOUT_MS);
+        await done;
+
+        sinon.assert.calledWithMatch(stubs.log.warn, /starts still in flight at the budget/);
+        sinon.assert.calledOnceWithExactly(stubs.appDockerStop, 'fluxweb_app1', 9);
+        sinon.assert.calledOnceWithExactly(exit, 0);
+      });
+
       it('stops them in parallel, all asked before any has stopped', async () => {
         const pending = [];
         stubs.appDockerStop.callsFake(() => new Promise((resolve) => { pending.push(resolve); }));
@@ -308,21 +341,11 @@ describe('nodeProcess', () => {
         expect(stubs.drainFoldersToPeers.firstCall.args[0]).to.equal(0);
       });
 
-      it('stops every decider and start path before it lists the containers to stop', async () => {
+      it('stops every decider and start path, then waits for the starts in flight, before it lists the containers to stop', async () => {
         await nodeProcess.handleSigterm();
 
         sinon.assert.calledOnce(stubs.setShutdownInProgressTrue);
-        sinon.assert.callOrder(stubs.setShutdownInProgressTrue, stubs.dockerListContainers);
-      });
-
-      it('stops a container whose start landed after the first list', async () => {
-        stubs.dockerListContainers.onFirstCall().resolves([]);
-        stubs.dockerListContainers.onSecondCall().resolves([{ Names: ['/fluxlate_app'] }]);
-
-        await nodeProcess.handleSigterm();
-
-        sinon.assert.calledWith(stubs.appDockerStop, 'fluxlate_app', 9);
-        sinon.assert.callOrder(stubs.appDockerStop, stubs.drainFoldersToPeers);
+        sinon.assert.callOrder(stubs.setShutdownInProgressTrue, stubs.whenNoneHeldOfType, stubs.dockerListContainers);
       });
 
       it('still exits when the drain cannot run', async () => {

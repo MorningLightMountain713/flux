@@ -23,6 +23,7 @@ const { AppSyncOrchestrator } = require('./appMessaging/appSyncOrchestrator');
 const { peerManager } = require('./utils/FluxPeerManager');
 const { CLOSE_CODES } = require('./utils/FluxPeerSocket');
 const verifyPool = require('./utils/verifyPool');
+const operationRegistry = require('./utils/operationRegistry');
 const releasedFleetSigterm = require('./appMessaging/releasedFleetSigterm');
 const processIdentity = require('./utils/processIdentity');
 const { DROP_REASON } = require('./utils/nodeDownCertificates');
@@ -286,6 +287,30 @@ async function stopFluxAppContainers() {
 }
 
 /**
+ * Waits, until the deadline, for every container start and restart in flight
+ * to finish. Each holds an 'actuating' or 'stopping' lease (dockerService), and
+ * one that takes its lease after the shutdown flag is set refuses, so once this
+ * resolves every container that will come up is up.
+ * @param {number} deadline performance.now() by which the wait gives up
+ * @returns {Promise<void>}
+ */
+async function waitForStartsInFlight(deadline) {
+  let timer;
+  const budget = new Promise((resolve) => {
+    timer = setTimeout(() => resolve(false), Math.max(0, deadline - performance.now()));
+  });
+  try {
+    const settled = await Promise.race([
+      operationRegistry.whenNoneHeldOfType('actuating', 'stopping').then(() => true),
+      budget,
+    ]);
+    if (!settled) log.warn('Shutdown: container starts still in flight at the budget; stopping what is running');
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
  * Pauses every syncthing folder, within SHUTDOWN_PAUSE_MS. Publishes
  * shutdown:paused with the folders paused, those that failed, and whether the
  * time ran out first.
@@ -369,9 +394,7 @@ async function shutDown() {
   if (globalState.isArcane()) {
     log.info('Arcane: the shutdown daemon stops the apps');
   } else {
-    // A start already under way when the flag was set can land after the first
-    // list is taken; the second pass stops it.
-    await stopFluxAppContainers();
+    await waitForStartsInFlight(deadline);
     await stopFluxAppContainers();
   }
 

@@ -972,6 +972,25 @@ describe('dockerService tests', () => {
       getContainerSpy.restore();
     });
 
+    // The shutdown waits for every start that holds its lease, so a start reads
+    // the flag only once it holds one.
+    it('refuses while the node shuts down, reading the flag with its lease held, and gives the lease back', async () => {
+      let heldAtRead = null;
+      const flag = sinon.stub(globalState, 'shutdownInProgress').get(() => {
+        heldAtRead = operationRegistry.anyHeldOfType('actuating');
+        return true;
+      });
+      try {
+        await expect(dockerService.appDockerStart(appName)).to.eventually.be.rejectedWith('this node is shutting down');
+      } finally {
+        flag.restore();
+      }
+
+      expect(heldAtRead, 'read the flag without its lease').to.equal(true);
+      expect(operationRegistry.anyHeldOfType('actuating'), 'kept the lease').to.equal(false);
+      sinon.assert.notCalled(dockerStub);
+    });
+
     it('should call a docker start command', async () => {
       const startResult = await dockerService.appDockerStart(appName);
 
@@ -1222,6 +1241,30 @@ describe('dockerService tests', () => {
       dockerStartStub.restore();
       dockerInspectStub.restore();
       getContainerSpy.restore();
+    });
+
+    [
+      { state: 'running', running: true, lease: 'stopping' },
+      { state: 'stopped', running: false, lease: 'actuating' },
+    ].forEach(({ state, running, lease }) => {
+      it(`refuses a ${state} container while the node shuts down, reading the flag with its ${lease} lease held`, async () => {
+        dockerInspectStub.returns(Promise.resolve({ State: { Running: running } }));
+        let heldAtRead = null;
+        const flag = sinon.stub(globalState, 'shutdownInProgress').get(() => {
+          heldAtRead = operationRegistry.anyHeldOfType(lease);
+          return true;
+        });
+        try {
+          await expect(dockerService.appDockerRestart(appName)).to.eventually.be.rejectedWith('this node is shutting down');
+        } finally {
+          flag.restore();
+        }
+
+        expect(heldAtRead, 'read the flag without its lease').to.equal(true);
+        expect(operationRegistry.anyHeldOfType(lease), 'kept the lease').to.equal(false);
+        sinon.assert.notCalled(dockerRestartStub);
+        sinon.assert.notCalled(dockerStartStub);
+      });
     });
 
     it('should call a docker restart command when container is running', async () => {

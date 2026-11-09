@@ -79,6 +79,22 @@ const ACTIVE_STANDBY_COORDINATOR_KEY = '__activeStandbyCoordinator__';
 // key -> { type, owner, reason, sinceMs, ttlMs, timer, token }
 const leases = new Map();
 
+// Callers of whenNoneHeldOfType still waiting: { types, resolve }.
+const quietWaiters = new Set();
+
+function heldOfType(types) {
+  return [...leases.values()].some((lease) => types.includes(lease.type));
+}
+
+// Resolves every waiter none of whose types is held any more.
+function notifyQuietWaiters() {
+  quietWaiters.forEach((waiter) => {
+    if (heldOfType(waiter.types)) return;
+    quietWaiters.delete(waiter);
+    waiter.resolve();
+  });
+}
+
 // Monotonic, process-local source for the opaque release token. acquire returns a
 // token; release(key, token) deletes ONLY when it matches the held lease, so a
 // stale releaser — a same-app skipGuard sibling, or a deferred/early-return path
@@ -116,6 +132,7 @@ function acquire(key, type, owner, reason = null, ttlMs = null) {
   const timer = setTimeout(() => {
     leases.delete(key);
     log.warn(`operationRegistry - lease '${key}' (${type}, owner=${owner}) exceeded ${Math.round(ttl / 1000)}s TTL; force-released (leak)`);
+    notifyQuietWaiters();
   }, ttl);
   if (timer.unref) timer.unref();
   nextToken += 1;
@@ -150,6 +167,7 @@ function release(key, token) {
   if (token !== undefined && lease.token !== token) return false;
   if (lease.timer) clearTimeout(lease.timer);
   leases.delete(key);
+  notifyQuietWaiters();
   return true;
 }
 
@@ -207,7 +225,19 @@ function anyHeld() {
  * @returns {boolean}
  */
 function anyHeldOfType(...types) {
-  return [...leases.values()].some((lease) => types.includes(lease.type));
+  return heldOfType(types);
+}
+
+/**
+ * Resolves once no lease of the given types is held: at once when none is, else
+ * at the release (or force-release) that leaves none. Leases of those types
+ * acquired before then are waited for too.
+ * @param {...string} types
+ * @returns {Promise<void>}
+ */
+function whenNoneHeldOfType(...types) {
+  if (!heldOfType(types)) return Promise.resolve();
+  return new Promise((resolve) => { quietWaiters.add({ types, resolve }); });
 }
 
 /**
@@ -228,9 +258,10 @@ function listByType(type) {
 function clear() {
   leases.forEach((lease) => { if (lease.timer) clearTimeout(lease.timer); });
   leases.clear();
+  notifyQuietWaiters();
 }
 
 module.exports = {
-  acquire, release, isHeld, get, list, anyHeld, anyHeldOfType, listByType, clear, TTL_MS,
+  acquire, release, isHeld, get, list, anyHeld, anyHeldOfType, whenNoneHeldOfType, listByType, clear, TTL_MS,
   isStopAligned, ACTIVE_STANDBY_COORDINATOR_KEY,
 };

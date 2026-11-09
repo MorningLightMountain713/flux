@@ -171,6 +171,53 @@ describe('operationRegistry', () => {
     });
   });
 
+  describe('whenNoneHeldOfType', () => {
+    const settledYet = async (promise) => {
+      let settled = false;
+      promise.then(() => { settled = true; });
+      await new Promise((resolve) => { setImmediate(resolve); });
+      return settled;
+    };
+
+    it('resolves at once when no lease of the types is held', async () => {
+      registry.acquire('api', 'install', 'appInstaller');
+      expect(await settledYet(registry.whenNoneHeldOfType('actuating', 'stopping'))).to.equal(true);
+    });
+
+    it('resolves at the release that leaves none of the types held, not before', async () => {
+      const first = registry.acquire('web_app', 'actuating', 'dockerService');
+      const second = registry.acquire('db_app', 'stopping', 'dockerService');
+      const quiet = registry.whenNoneHeldOfType('actuating', 'stopping');
+
+      registry.release('web_app', first);
+      expect(await settledYet(quiet), 'resolved while a stopping lease is held').to.equal(false);
+      registry.release('db_app', second);
+      expect(await settledYet(quiet)).to.equal(true);
+    });
+
+    it('waits for a lease of the types taken after it was asked', async () => {
+      const first = registry.acquire('web_app', 'actuating', 'dockerService');
+      const quiet = registry.whenNoneHeldOfType('actuating');
+      const late = registry.acquire('db_app', 'actuating', 'dockerService');
+
+      registry.release('web_app', first);
+      expect(await settledYet(quiet), 'resolved while a later start is held').to.equal(false);
+      registry.release('db_app', late);
+      expect(await settledYet(quiet)).to.equal(true);
+    });
+
+    it('resolves when the TTL force-releases the last lease', async () => {
+      const clock = sinon.useFakeTimers();
+      registry.acquire('web_app', 'actuating', 'dockerService');
+      let settled = false;
+      registry.whenNoneHeldOfType('actuating').then(() => { settled = true; });
+
+      await clock.tickAsync(registry.TTL_MS.actuating + 1);
+
+      expect(settled).to.equal(true);
+    });
+  });
+
   describe('TTL watchdog', () => {
     it('force-releases a leaked lease after its TTL and logs loudly', () => {
       const clock = sinon.useFakeTimers();

@@ -1533,6 +1533,21 @@ function acquireTransitionLease(dockerName, type, reason) {
   return token;
 }
 
+/**
+ * Refuses a start or restart once the node is shutting down, giving back the
+ * lease it took. Read after the lease is held: the shutdown sets the flag, then
+ * waits for every 'actuating' and 'stopping' lease (nodeProcess), so a start
+ * either refuses here or is held when the shutdown waits, and stopped after.
+ * @param {string} dockerName
+ * @param {string} token the lease this start holds
+ * @param {string} message
+ */
+function refuseDuringShutdown(dockerName, token, message) {
+  if (!globalState.shutdownInProgress) return;
+  operationRegistry.release(dockerName, token);
+  throw new Error(message);
+}
+
 // A container that vanishes between a caller's state read and its docker call (an
 // out-of-band `docker rm -f` mid-pass) is not a crash of the workload. Tagged
 // ENOCONTAINER so a caller pacing a crash ladder treats it as "the world changed"
@@ -1584,11 +1599,11 @@ function tagIfRegistryUnreachable(err) {
 }
 
 async function appDockerStart(idOrName) {
-  if (globalState.shutdownInProgress) throw new Error(`Not starting ${idOrName}: this node is shutting down`);
   const dockerName = getDockerName(idOrName);
   // Hold 'actuating' across the start so a concurrent teardown's remove defers instead
   // of tearing the container down mid-create; released own-lease-only in finally.
   const token = acquireTransitionLease(dockerName, 'actuating', `start ${dockerName}`);
+  refuseDuringShutdown(dockerName, token, `Not starting ${idOrName}: this node is shutting down`);
   try {
     // container ID or name
     const dockerContainer = await getDockerContainer(idOrName);
@@ -1685,7 +1700,6 @@ async function appDockerStop(idOrName, timeout) {
  * @returns {string} message
  */
 async function appDockerRestart(idOrName) {
-  if (globalState.shutdownInProgress) throw new Error(`Not restarting ${idOrName}: this node is shutting down`);
   // container ID or name
   const dockerContainer = await getDockerContainer(idOrName);
   if (!dockerContainer) throw containerGoneError(idOrName);
@@ -1697,6 +1711,7 @@ async function appDockerRestart(idOrName) {
     // Stopped -> this is really a start, so hold 'actuating' (a die here is a real
     // crash) rather than 'stopping'; a concurrent teardown's remove defers on it.
     const startToken = acquireTransitionLease(dockerName, 'actuating', `restart(start) ${dockerName}`);
+    refuseDuringShutdown(dockerName, startToken, `Not restarting ${idOrName}: this node is shutting down`);
     try {
       await dockerContainer.start({ abortSignal: deadline(REQUEST_TIMEOUT_MS) });
     } catch (err) {
@@ -1708,6 +1723,7 @@ async function appDockerRestart(idOrName) {
   }
 
   const token = acquireTransitionLease(dockerName, 'stopping', `restart ${dockerName}`);
+  refuseDuringShutdown(dockerName, token, `Not restarting ${idOrName}: this node is shutting down`);
   try {
     // A restart is a stop at docker's default SIGKILL deadline, then a start.
     await dockerContainer.restart({ abortSignal: deadline((DEFAULT_STOP_SECONDS * 1000) + STOP_SLACK_MS + REQUEST_TIMEOUT_MS) });
