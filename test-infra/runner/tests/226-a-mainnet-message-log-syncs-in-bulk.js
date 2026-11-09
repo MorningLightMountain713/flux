@@ -35,7 +35,8 @@ import { setSystemSecure, stopTicker } from '../framework/daemon-control.js';
 import { getSubnetConfig } from '../framework/subnet-config.js';
 import { dbClient } from '../framework/db-client.js';
 import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
-import { Chain, appPaymentAddress, expiresAtHeightFor } from '@runonflux/flux-spec';
+import { addressIndexOf, signedMessage } from '../framework/app-payments.js';
+import { Chain, expiresAtHeightFor } from '@runonflux/flux-spec';
 
 const FIXTURE = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'fixtures', 'mainnet-message-slice');
 const JOINER = 3;
@@ -48,50 +49,15 @@ const readLines = (file) => gunzipSync(readFileSync(join(FIXTURE, file))).toStri
 // The height a v1-v8 app's term ends at on the harness chain, as flux-spec reads it.
 const expirationHeight = (height, expire) => expiresAtHeightFor({ height, expire, chain: Chain.HARNESS });
 
-// The hash as a payment's last output carries it: OP_RETURN and the hash's ASCII text in hex.
-const opReturn = (hash) => `OP_RETURN ${Buffer.from(hash, 'ascii').toString('hex')}`;
-
-/**
- * The daemon's address index for the slice's payments: each record's transaction, paying the
- * address in force at its height and carrying the hash. Within a block the payments take their
- * positions in their messages' timestamp order.
- */
-function addressIndexOf(records, messageOf) {
-  const ordered = [...records].sort((a, b) => a.height - b.height
-    || messageOf.get(a.hash).timestamp - messageOf.get(b.hash).timestamp);
-  const nextAtHeight = new Map();
-  const deltas = [];
-  const transactions = [];
-  for (const record of ordered) {
-    const blockindex = nextAtHeight.get(record.height) ?? 0;
-    nextAtHeight.set(record.height, blockindex + 1);
-    const address = appPaymentAddress(Chain.HARNESS, record.height);
-    deltas.push({
-      satoshis: record.value, txid: record.txid, index: 0, blockindex, height: record.height, address,
-    });
-    transactions.push({
-      txid: record.txid,
-      version: 1,
-      locktime: 0,
-      height: record.height,
-      vin: [],
-      vout: [
-        { value: record.value / 1e8, valueSat: record.value, n: 0, scriptPubKey: { addresses: [address] } },
-        { value: 0, valueSat: 0, n: 1, scriptPubKey: { asm: opReturn(record.hash) } },
-      ],
-    });
-  }
-  return { deltas, transactions };
-}
-
-// The message as its owner signed it: what a node is handed.
-function signed(message) {
-  const {
-    type, version, appSpecifications, hash, timestamp, signature,
-  } = message;
-  return {
-    type, version, appSpecifications, hash, timestamp, signature,
-  };
+// Within a block the slice's payments take their positions in their messages' timestamp order.
+function paymentsInChainOrder(records, messageOf) {
+  return [...records].sort((a, b) => a.height - b.height
+    || messageOf.get(a.hash).timestamp - messageOf.get(b.hash).timestamp)
+    .map(({
+      hash, txid, height, value,
+    }) => ({
+      hash, txid, height, value,
+    }));
 }
 
 describe('a node that joins takes a slice of the mainnet message log in bulk', function () {
@@ -129,13 +95,13 @@ describe('a node that joins takes a slice of the mainnet message log in bulk', f
       deferredNodes: 1,
       initialHeight: manifest.scannedHeight + 1,
       unscanned: true,
-      addressIndex: addressIndexOf(records, messageOf),
+      addressIndex: addressIndexOf(paymentsInChainOrder(records, messageOf)),
     });
     await bootAndPeer(env);
     await stopTicker();
 
     // Each peer decides each message by its own rules; the joiner is what this suite judges.
-    const queue = messages.map(signed);
+    const queue = messages.map(signedMessage);
     await Promise.all(PEERS.map(async (peer) => {
       const next = [...queue];
       await Promise.all(Array.from({ length: HAND_CONCURRENCY }, async () => {
