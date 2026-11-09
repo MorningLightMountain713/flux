@@ -6,7 +6,7 @@
       {
         "file": "ZelBack/src/services/appLifecycle/appOperations.js",
         "from": "    log.warn(`Reconcile of ${installed.name} failed (${error.message}); handing recovery to the reconciler`);\n",
-        "to": "    log.warn(`Reconcile of ${installed.name} failed (${error.message}); handing recovery to the reconciler`);\n    await appUninstaller.uninstallApplication(installed.name, { broadcastRemoval: true });\n"
+        "to": "    log.warn(`Reconcile of ${installed.name} failed (${error.message}); handing recovery to the reconciler`);\n    await appUninstaller.uninstallApplication(installed.name, { broadcastRemoval: true, skipGuard: true });\n"
       }
     ],
     "red": [
