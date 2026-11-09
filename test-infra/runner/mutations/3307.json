@@ -15,17 +15,17 @@
     ]
   },
   {
-    "name": "dropped-component-kept",
-    "breaks": "the update removes the components the new specification drops",
+    "name": "changed-component-kept",
+    "breaks": "the update recreates a component the new specification changes",
     "edits": [
       {
         "file": "ZelBack/src/services/appLifecycle/appOperations.js",
-        "from": "  const toUninstall = [...removed, ...recreateVolume, ...keepVolume];",
-        "to": "  const toUninstall = [...recreateVolume, ...keepVolume];"
+        "from": "    if (oldComp.equals(newComp)) {",
+        "to": "    if (oldComp.equals(newComp) || oldComp) {"
       }
     ],
     "red": [
-      "brings the app to its new specification, running as a component"
+      "brings the app to its new specification, in a container made for it"
     ]
   }
 ]

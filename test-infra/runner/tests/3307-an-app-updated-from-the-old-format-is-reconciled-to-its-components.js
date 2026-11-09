@@ -1,9 +1,10 @@
 // fleet: 3
 /*
  * An app installed at specification version 3 is updated to a version that has
- * components. Each holder brings it to the new specification in place: the old
- * container goes, the component comes up, and the node's record of the app is the
- * new specification (appOperations.reconcileApp, app:reconciled).
+ * components. Each holder brings it to the new specification in place: its
+ * container is replaced by one made for the new specification, and the node's
+ * record of the app is the new specification (appOperations.reconcileApp,
+ * app:reconciled).
  *
  * On node 1 the database refuses the write of that record once. The update fails
  * there and the node keeps the app: it tells no peer it has gone, and the update is
@@ -62,10 +63,10 @@ async function upgradeOf(env, legacy) {
   });
 }
 
-// An app at specification version 3 has one container, named for the app alone.
-async function legacyContainerId(container, name) {
-  const { stdout } = await execInContainer(container, `docker inspect --format '{{.Id}}' flux${name} 2>/dev/null || echo ""`);
-  return stdout.trim() || null;
+// Whether a container of that id is still on the node.
+async function containerExists(container, id) {
+  const { stdout } = await execInContainer(container, `docker inspect --format '{{.Id}}' ${id} 2>/dev/null || echo ""`);
+  return stdout.trim() !== '';
 }
 
 async function installedHash(client, name) {
@@ -81,6 +82,8 @@ describe('an app updated from the old format is reconciled to its components', f
   let upgraded;
   let release;
   let anchors;
+  // Each node's container of the app at the old specification.
+  let oldContainers;
 
   const reconciled = (i, outcome, afterId = anchors[i]) => env.clients[i].getEventBuffer()
     .find((e) => e.id > afterId && e.event === 'app:reconciled' && e.data.name === appName && e.data.outcome === outcome);
@@ -98,9 +101,10 @@ describe('an app updated from the old format is reconciled to its components', f
     await pushImage(appName, 'v1');
     const legacy = await buildSeedableLegacyApp({ name: appName });
     await installOnNodes(env, legacy, [...Array(NODES).keys()]);
-    await waitFor(async () => (await Promise.all(env.clients.map((c) => legacyContainerId(c.container, appName)))).every(Boolean), {
-      timeout: 180000, interval: 2000, label: 'every node runs the old-format app',
-    });
+    await waitFor(async () => {
+      oldContainers = await Promise.all(env.clients.map((c) => getAppContainerId(c.container, appName)));
+      return oldContainers.every(Boolean);
+    }, { timeout: 180000, interval: 2000, label: 'every node runs the old-format app' });
 
     upgraded = await upgradeOf(env, legacy);
     anchors = env.clients.map((client) => client.getLastEventId());
@@ -114,17 +118,20 @@ describe('an app updated from the old format is reconciled to its components', f
     await env?.teardown();
   });
 
-  it('brings the app to its new specification, running as a component', async function () {
+  it('brings the app to its new specification, in a container made for it', async function () {
     this.timeout(ADOPTION_MS + 120000);
     const node = env.clients[COMPLETES];
     await waitFor(() => Boolean(reconciled(COMPLETES, 'complete')), {
       timeout: ADOPTION_MS, interval: 2000, label: 'node 2 completes the update',
     });
     expect(await installedHash(node, appName), 'the node records another specification').to.equal(upgraded.hash);
-    await waitFor(async () => Boolean(await getAppContainerId(node.container, appName, appName)), {
-      timeout: 120000, interval: 2000, label: 'the app runs as a component',
-    });
-    expect(await legacyContainerId(node.container, appName), 'the old-format container is still there').to.equal(null);
+    let current;
+    await waitFor(async () => {
+      current = await getAppContainerId(node.container, appName);
+      return Boolean(current);
+    }, { timeout: 120000, interval: 2000, label: 'the app runs at its new specification' });
+    expect(current, 'the app runs in its old-format container').to.not.equal(oldContainers[COMPLETES]);
+    expect(await containerExists(node.container, oldContainers[COMPLETES]), 'the old-format container is still there').to.equal(false);
   });
 
   it('keeps the app when the write of its new record is refused, and tells no peer it has gone', async function () {
@@ -152,8 +159,8 @@ describe('an app updated from the old format is reconciled to its components', f
     });
     const node = env.clients[REFUSED];
     expect(await installedHash(node, appName), 'node 1 records another specification').to.equal(upgraded.hash);
-    await waitFor(async () => Boolean(await getAppContainerId(node.container, appName, appName)), {
-      timeout: 120000, interval: 2000, label: 'the app runs as a component on node 1',
+    await waitFor(async () => Boolean(await getAppContainerId(node.container, appName)), {
+      timeout: 120000, interval: 2000, label: 'the app runs at its new specification on node 1',
     });
   });
 });
