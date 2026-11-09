@@ -720,17 +720,17 @@ const benchHandlers = {
  * @param {string} server Which server answered — 'fluxd' or 'benchd'. Both write to one
  *   journal and both answer getinfo, help and stop, so a journal entry that did not say
  *   which it was could not tell them apart.
- * @param {object} req Express request.
- * @param {object} res Express response.
- * @returns {Promise<object>} The express response.
+ * @param {object} request The call: { method, params, id }.
+ * @param {string} sourceIp The caller's address as express reports it.
+ * @returns {Promise<{status: number, body: object}>} The HTTP status the call takes when
+ *   sent alone, and its response.
  */
-async function handleRpc(handlers, server, req, res) {
-  const { method, params, id } = req.body;
-  const sourceIp = req.ip;
+async function answerRpc(handlers, server, request, sourceIp) {
+  const { method, params, id } = request || {};
   const cleanIp = sourceIp.replace('::ffff:', '');
 
   if (!method) {
-    return res.status(400).json({ result: null, error: { code: -32600, message: 'Missing method' }, id });
+    return { status: 400, body: { result: null, error: { code: -32600, message: 'Missing method' }, id } };
   }
 
   requestJournal.push({
@@ -740,7 +740,7 @@ async function handleRpc(handlers, server, req, res) {
 
   // fluxd loading its block index; fluxbenchd is a separate process and keeps answering.
   if (server === 'fluxd' && rpcFailures.has(cleanIp)) {
-    return res.json({ result: null, error: { code: -28, message: 'Loading block index...' }, id });
+    return { status: 200, body: { result: null, error: { code: -28, message: 'Loading block index...' }, id } };
   }
 
   const lowerMethod = method.toLowerCase();
@@ -748,7 +748,7 @@ async function handleRpc(handlers, server, req, res) {
   const failing = rpcMethodFailures.get(cleanIp);
   if (failing && failing.get(lowerMethod) > 0) {
     failing.set(lowerMethod, failing.get(lowerMethod) - 1);
-    return res.json({ result: null, error: { code: -1, message: `${lowerMethod} failed by the harness` }, id });
+    return { status: 200, body: { result: null, error: { code: -1, message: `${lowerMethod} failed by the harness` }, id } };
   }
 
   const heldMethods = rpcHolds.get(cleanIp);
@@ -761,18 +761,37 @@ async function handleRpc(handlers, server, req, res) {
 
   if (!handler) {
     console.log(`Unhandled RPC method: ${method} from ${sourceIp}`);
-    return res.json({ result: null, error: { code: -32601, message: `Method not found: ${method}` }, id });
+    return { status: 200, body: { result: null, error: { code: -32601, message: `Method not found: ${method}` }, id } };
   }
 
   try {
     // await so async handlers (HPKE transport) resolve before the reply; a
     // sync handler's plain value awaits to itself.
     const result = await (typeof handler === 'function' ? handler.call(handlers, params || [], sourceIp) : handler);
-    return res.json({ result, error: null, id });
+    return { status: 200, body: { result, error: null, id } };
   } catch (e) {
     console.error(`RPC error for ${method} from ${sourceIp}:`, e.message);
-    return res.json({ result: null, error: { code: -1, message: e.message }, id });
+    return { status: 200, body: { result: null, error: { code: -1, message: e.message }, id } };
   }
+}
+
+/**
+ * Answers a request as fluxd does: a call sent alone by its response, a batch (an
+ * array of calls) with 200 and an array of their responses in order, each carrying
+ * its own error; an empty batch by an empty array.
+ * @param {object} handlers The server's method table.
+ * @param {string} server 'fluxd' or 'benchd'.
+ * @param {object} req Express request.
+ * @param {object} res Express response.
+ * @returns {Promise<object>} The express response.
+ */
+async function handleRpc(handlers, server, req, res) {
+  if (!Array.isArray(req.body)) {
+    const { status, body } = await answerRpc(handlers, server, req.body, req.ip);
+    return res.status(status).json(body);
+  }
+  const answers = await Promise.all(req.body.map((request) => answerRpc(handlers, server, request, req.ip)));
+  return res.json(answers.map(({ body }) => body));
 }
 
 // -- Fluxd RPC server --
