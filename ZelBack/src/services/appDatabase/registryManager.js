@@ -1368,7 +1368,7 @@ async function getRunningAppIpList(ip) {
  */
 async function reindexGlobalAppsLocationAPI(req, res) {
   try {
-    const authorized = await verificationHelper.verifyPrivilege(Privilege.NODE_OPERATOR_OR_FLUX_TEAM, authOf(req));
+    const authorized = await verificationHelper.verifyPrivilege(Privilege.FLUX_TEAM, authOf(req));
     if (authorized === true) {
       res.json(messageHelper.createSuccessMessage('Deprecated: app locations are derived from the app state event log, there is nothing to reindex'));
     } else {

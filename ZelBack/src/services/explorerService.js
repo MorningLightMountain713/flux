@@ -1822,7 +1822,7 @@ async function reindexExplorerApi(req, res) {
  * @param {import('express').Response} res
  */
 async function rescanExplorerApi(req, res) {
-  const authorized = await verificationHelper.verifyPrivilege(Privilege.NODE_OPERATOR_OR_FLUX_TEAM, authOf(req));
+  const authorized = await verificationHelper.verifyPrivilege(Privilege.FLUX_TEAM, authOf(req));
   if (authorized !== true) {
     res.json(messageHelper.errUnauthorizedMessage());
     return;

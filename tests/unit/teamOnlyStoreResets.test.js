@@ -1,7 +1,7 @@
-// The endpoints that reset a store: the explorer's chain data, which every app
-// payment is read from, and the location store, which every location read is
-// answered from. Resetting either is a Flux team operation, never a node
-// operator's.
+// The endpoints that reset a store are a Flux team operation, never a node
+// operator's: the explorer's reindex and rescan rebuild the chain data every app
+// payment is read from, and the location reindex, which has nothing to rebuild
+// since locations are derived from the app state events, answers only the team.
 //
 // The explorer reset covers chain data only. Its apps flag would drop the app
 // messages, which come from the network rather than the chain, and the
@@ -33,8 +33,8 @@ describe('endpoints that reset a store', () => {
   });
 
   [
-    { name: 'explorer reindex', handler: () => explorerService.reindexExplorer },
-    { name: 'explorer rescan', handler: () => explorerService.rescanExplorer },
+    { name: 'explorer reindex', handler: () => explorerService.reindexExplorerApi },
+    { name: 'explorer rescan', handler: () => explorerService.rescanExplorerApi },
     { name: 'global apps location reindex', handler: () => registryManager.reindexGlobalAppsLocationAPI },
   ].forEach(({ name, handler }) => {
     it(`${name} asks for the Flux team and nothing wider, and refuses anyone else`, async () => {
@@ -71,8 +71,8 @@ describe('the explorer reset\'s apps flag', () => {
   };
 
   [
-    { name: 'explorer reindex', handler: () => explorerService.reindexExplorer, params: { reindexapps: 'true' } },
-    { name: 'explorer rescan', handler: () => explorerService.rescanExplorer, params: { blockheight: '100', rescanapps: 'true' } },
+    { name: 'explorer reindex', handler: () => explorerService.reindexExplorerApi, params: { reindexapps: 'true' } },
+    { name: 'explorer rescan', handler: () => explorerService.rescanExplorerApi, params: { blockheight: '100', rescanapps: 'true' } },
   ].forEach(({ name, handler, params }) => {
     it(`${name} refuses the apps flag with a 400 saying the registry needs no rebuild, and touches nothing`, async () => {
       const res = response();
