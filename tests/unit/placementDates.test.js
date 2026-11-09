@@ -8,11 +8,15 @@ const { instanceKey } = require('../../ZelBack/src/services/appDatabase/appRecor
 
 const ME = '203.0.113.40:16127';
 const resources = (name, replica, placedAt = null) => ({ name, replica, placedAt });
+// What ownAnnouncedEntries answers for these announced entries.
+const announced = (entries) => new Map(entries.map(({ name, replica, runningSince }) => [
+  instanceKey({ name, replica }), { runningSince, broadcastedAt: new Date('2026-11-01T00:00:00Z') },
+]));
 
 describe('placementDates', () => {
   let held;
   let setPlacedAt;
-  let appLocationFromEvents;
+  let ownAnnouncedEntries;
   let waitForLocalSocketAddress;
   let publish;
   let placementDates;
@@ -20,7 +24,7 @@ describe('placementDates', () => {
   beforeEach(() => {
     held = [];
     setPlacedAt = sinon.stub().resolves();
-    appLocationFromEvents = sinon.stub().resolves([]);
+    ownAnnouncedEntries = sinon.stub().resolves(new Map());
     waitForLocalSocketAddress = sinon.stub().resolves(ME);
     publish = sinon.stub();
     placementDates = proxyquire('../../ZelBack/src/services/appLifecycle/placementDates', {
@@ -32,7 +36,7 @@ describe('placementDates', () => {
           setPlacedAt,
         }),
       },
-      '../appDatabase/appsRepository': { appLocationFromEvents },
+      '../appDatabase/appsRepository': { ownAnnouncedEntries },
       '../fluxNetworkHelper': { waitForLocalSocketAddress },
       '../utils/fluxEventBus': { publish },
       '../../lib/log': { info: sinon.stub(), warn: sinon.stub(), error: sinon.stub() },
@@ -42,21 +46,21 @@ describe('placementDates', () => {
   describe('announcedSince', () => {
     it('is the date the instance\'s resources hold, whatever this node last announced', async () => {
       held.push(resources('web', null, new Date('2026-01-01T00:00:00Z')));
-      appLocationFromEvents.resolves([{ name: 'web', replica: null, runningSince: '2026-10-01T00:00:00.000Z' }]);
+      ownAnnouncedEntries.resolves(announced([{ name: 'web', replica: null, runningSince: '2026-10-01T00:00:00.000Z' }]));
 
       expect(await placementDates.announcedSince('web', null, ME)).to.equal('2026-01-01T00:00:00.000Z');
-      sinon.assert.notCalled(appLocationFromEvents);
+      sinon.assert.notCalled(ownAnnouncedEntries);
     });
 
     it('is what this node last announced for that instance when its resources hold no date', async () => {
       held.push(resources('web', 'r1'), resources('web', 'r2'));
-      appLocationFromEvents.resolves([
+      ownAnnouncedEntries.resolves(announced([
         { name: 'Web', replica: 'r2', runningSince: '2026-02-02T00:00:00.000Z' },
         { name: 'web', replica: 'r1', runningSince: '2026-01-01T00:00:00.000Z' },
-      ]);
+      ]));
 
       expect(await placementDates.announcedSince('web', 'r1', ME)).to.equal('2026-01-01T00:00:00.000Z');
-      sinon.assert.calledWithExactly(appLocationFromEvents, { ip: ME });
+      sinon.assert.calledWithExactly(ownAnnouncedEntries, ME);
     });
 
     it('is now for an instance neither dated nor announced', async () => {
@@ -76,10 +80,10 @@ describe('placementDates', () => {
         resources('db', 'r1'),
         resources('cache', null, new Date('2026-01-01T00:00:00Z')),
       );
-      appLocationFromEvents.resolves([
+      ownAnnouncedEntries.resolves(announced([
         { name: 'web', replica: null, runningSince: '2026-03-03T00:00:00.000Z' },
         { name: 'cache', replica: null, runningSince: '2026-09-09T00:00:00.000Z' },
-      ]);
+      ]));
       const before = Date.now();
 
       const result = await placementDates.dateUndatedPlacements();
@@ -102,12 +106,12 @@ describe('placementDates', () => {
 
       const dating = placementDates.dateUndatedPlacements();
       await new Promise((resolve) => { setImmediate(resolve); });
-      sinon.assert.notCalled(appLocationFromEvents);
+      sinon.assert.notCalled(ownAnnouncedEntries);
       sinon.assert.notCalled(setPlacedAt);
 
       giveAddress(ME);
       await dating;
-      sinon.assert.calledOnceWithExactly(appLocationFromEvents, { ip: ME });
+      sinon.assert.calledOnceWithExactly(ownAnnouncedEntries, ME);
       sinon.assert.calledOnce(setPlacedAt);
     });
 
@@ -115,7 +119,7 @@ describe('placementDates', () => {
       held.push(resources('web', null, new Date('2026-01-01T00:00:00Z')));
 
       expect(await placementDates.dateUndatedPlacements()).to.deep.equal({ dated: 0, fromAnnouncements: 0 });
-      sinon.assert.notCalled(appLocationFromEvents);
+      sinon.assert.notCalled(ownAnnouncedEntries);
       sinon.assert.notCalled(setPlacedAt);
     });
   });

@@ -20,15 +20,14 @@ const fluxEventBus = require('../utils/fluxEventBus');
 
 /**
  * What this node last announced for each instance it announced, by name and
- * replica.
+ * replica: its own announcements, whatever the network has since recorded
+ * about the node being down.
  * @param {string} localSocketAddr This node's address, which its announcements are filed under.
  * @returns {Promise<Map<string, string>>} runningSince by instance key
  */
 async function lastAnnounced(localSocketAddr) {
-  const claims = await appsRepository.appLocationFromEvents({ ip: localSocketAddr });
-  return new Map(claims
-    .filter((claim) => claim.runningSince)
-    .map((claim) => [appRecords.instanceKey({ name: claim.name, replica: claim.replica ?? null }), claim.runningSince]));
+  const entries = await appsRepository.ownAnnouncedEntries(localSocketAddr);
+  return new Map([...entries].map(([key, { runningSince }]) => [key, runningSince]));
 }
 
 /**

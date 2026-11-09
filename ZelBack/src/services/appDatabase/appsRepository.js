@@ -673,6 +673,43 @@ async function appLocationFromEvents(options = {}) {
 }
 
 /**
+ * What a node itself last announced for each instance, from its own stored
+ * announcements: the one at `ip`, and the one at each address a recorded move
+ * led from to `ip`. The newest announcement naming an instance answers for it.
+ * Unlike appLocationFromEvents this is the node's own record, so no certificate,
+ * removal or departure overrules it: they say whether the node holds an app now,
+ * not when it took it.
+ *
+ * @param {string} ip - the node's address as its announcements carry it
+ * @returns {Promise<Map<string, {runningSince: string, broadcastedAt: Date}>>}
+ *   keyed by appRecords.instanceKey
+ */
+async function ownAnnouncedEntries(ip) {
+  const dbopen = dbHelper.databaseConnection();
+  const database = dbopen.db(config.get('database.appsglobal.database'));
+  const collection = database.collection(globalAppStateEvents);
+  const movedFrom = (await collection.find(
+    { type: 'ipchanged', 'data.newIP': ip },
+    { projection: { _id: 0, ip: 1 } },
+  ).toArray()).map((move) => move.ip);
+  const announcements = await collection.find(
+    { type: 'apprunning', dedupKey: 'v2', ip: { $in: [ip, ...movedFrom] } },
+    { projection: { _id: 0, broadcastedAt: 1, 'data.apps': 1 } },
+  ).toArray();
+  const entries = new Map();
+  announcements.forEach(({ broadcastedAt, data }) => {
+    (Array.isArray(data?.apps) ? data.apps : []).forEach((app) => {
+      if (typeof app?.name !== 'string' || !app.runningSince) return;
+      const key = appRecords.instanceKey({ name: app.name, replica: app.replica ?? null });
+      const held = entries.get(key);
+      if (held && held.broadcastedAt >= broadcastedAt) return;
+      entries.set(key, { runningSince: app.runningSince, broadcastedAt });
+    });
+  });
+  return entries;
+}
+
+/**
  * What this node holds about one address's rows: every stored location event
  * for it, unfiltered, and whether the derivation's address rules deny it. The
  * inputs appLocationFromEvents({ ip }) decides on, for a caller that must say
@@ -836,6 +873,7 @@ module.exports = {
   upsertAppInstallingErrorLocations,
   // the running set, derived from the app state event log
   appLocationFromEvents,
+  ownAnnouncedEntries,
   placementEvidence,
   countRunningByApp,
   removeInstallingLocation,
