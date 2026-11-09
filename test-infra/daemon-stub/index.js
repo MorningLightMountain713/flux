@@ -304,6 +304,13 @@ function publishReported(list) {
  * @param {{addresses?: string[], start?: number, end?: number}} query
  * @returns {object[]}
  */
+// The seeded deltas a query for these addresses over this height range answers,
+// as fluxd's address index filters them.
+function seededDeltasFor({ addresses = [], start = 0, end = Infinity }) {
+  const wanted = new Set(addresses);
+  return seededAddressDeltas.filter((delta) => wanted.has(delta.address) && delta.height >= start && delta.height <= end);
+}
+
 function blockAddressDeltas({ addresses = [], start = 0, end = Infinity }) {
   const wanted = new Set(addresses);
   const deltas = [];
@@ -570,7 +577,7 @@ const rpcHandlers = {
   getaddressbalance: () => ({ balance: 0, received: 0 }),
   getaddressutxos: () => [],
   getaddresstxids: () => (seededAddressTxids.length > 0 ? seededAddressTxids : []),
-  getaddressdeltas: (params) => [...seededAddressDeltas, ...blockAddressDeltas(params[0] || {})],
+  getaddressdeltas: (params) => [...seededDeltasFor(params[0] || {}), ...blockAddressDeltas(params[0] || {})],
 
   listunspent: () => [],
   validateaddress: (params) => ({
@@ -1619,6 +1626,13 @@ control.post('/seed-address-txids', (req, res) => {
   if (!Array.isArray(txids)) return res.status(400).json({ error: 'txids must be an array' });
   seededAddressTxids.push(...txids);
   return res.json({ count: seededAddressTxids.length });
+});
+
+control.post('/seed-transactions', (req, res) => {
+  const { transactions } = req.body;
+  if (!Array.isArray(transactions)) return res.status(400).json({ error: 'transactions must be an array' });
+  transactions.forEach((tx) => seededTransactions.set(tx.txid, tx));
+  return res.json({ count: seededTransactions.size });
 });
 
 control.post('/seed-transaction', (req, res) => {

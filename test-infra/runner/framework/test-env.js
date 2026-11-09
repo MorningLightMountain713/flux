@@ -1016,7 +1016,27 @@ function getBootId(nodeNum) {
   return `test-boot-id-node-${String(nodeNum).padStart(2, '0')}`;
 }
 
-async function seedMongo(mongoIp, nodeCount, bootContext = 'running', { dataCenter = true, staticIp = true, initialHeight = DEFAULT_INITIAL_HEIGHT, policySeeds = null, arcane = false, seedPolicyGrant = true } = {}) {
+// The daemon's address index, given to the stub before any node boots: the deltas
+// getaddressdeltas answers and the transactions getrawtransaction answers verbosely.
+async function seedAddressIndex({ deltas = [], transactions = [] }) {
+  const post = async (path, body) => {
+    const res = await fetch(`http://${DAEMON_IP}:18232${path}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    });
+    if (!res.ok) throw new Error(`daemon stub ${path}: ${res.status} ${await res.text()}`);
+  };
+  for (let i = 0; i < deltas.length; i += 200) {
+    // eslint-disable-next-line no-await-in-loop
+    await post('/seed-address-deltas', { deltas: deltas.slice(i, i + 200) });
+  }
+  for (let i = 0; i < transactions.length; i += 100) {
+    // eslint-disable-next-line no-await-in-loop
+    await post('/seed-transactions', { transactions: transactions.slice(i, i + 100) });
+  }
+}
+
+async function seedMongo(mongoIp, nodeCount, bootContext = 'running', { dataCenter = true, staticIp = true, initialHeight = DEFAULT_INITIAL_HEIGHT, policySeeds = null, arcane = false, seedPolicyGrant = true, unscanned = false,
+} = {}) {
   const client = new MongoClient(`mongodb://${mongoIp}:27017`);
   try {
     await client.connect();
@@ -1037,12 +1057,15 @@ async function seedMongo(mongoIp, nodeCount, bootContext = 'running', { dataCent
         await client.db(`node${num}_chainparams`).collection('policygroupmessages')
           .insertOne(structuredClone(policyGrant));
       }
-      const explorerDb = client.db(`node${num}_zelcashdata`);
-      await explorerDb.collection('scannedheight').updateOne(
-        {},
-        { $set: { generalScannedHeight: initialHeight } },
-        { upsert: true },
-      );
+      const startsUnscanned = unscanned === true || (Array.isArray(unscanned) && unscanned.includes(i - 1));
+      if (!startsUnscanned) {
+        const explorerDb = client.db(`node${num}_zelcashdata`);
+        await explorerDb.collection('scannedheight').updateOne(
+          {},
+          { $set: { generalScannedHeight: initialHeight } },
+          { upsert: true },
+        );
+      }
       const localDb = client.db(`node${num}_zelfluxlocal`);
       await localDb.collection('geolocation').updateOne(
         { _id: 'nodeGeolocation' },
@@ -1241,6 +1264,13 @@ export async function createTestEnv({
   // kubo, and a GC runner a suite drives through fluxdrive-real.js. On the
   // harness clock when the suite is.
   fluxDrive = 'stub',
+  // Nodes that start with no scanned height, as a fresh node does, so each records
+  // the chain's app payments from the daemon's address index before it scans on
+  // from the tip: true for every node, or a list of node indices.
+  unscanned = false,
+  // The daemon's address index, given to the stub before any node boots:
+  // { deltas: [getaddressdeltas records], transactions: [verbose transactions] }.
+  addressIndex = null,
   ...unknownOptions
 } = {}) {
   const unknown = Object.keys(unknownOptions);
@@ -1595,7 +1625,7 @@ export async function createTestEnv({
     // boot's own.
     await startInfraDeathWatch(env);
     await _buildEnv(env, nodes, deferredNodes, legacyNodes, unprivilegedNodes, stubPeers, silentSyncPeers, unverifiableSyncPeers, policyUnawarePeers, stubPeerings, mergedOverrides, mergedNodeOverrides, nodeTiers, dataCenter, tickerAutostart, discoveryAutostart, nodeStatusOverrides, rpcFailures, bootContext, initialHeight, syncthing, aptSeeded, aptBadSource, geolocation, locationTable, staticIp, policy, policySeeds, policyReachable, pm2Nodes, pausedSyncthingNodes, { ...sharedKeys, ...collateralOf }, networkShapes, globalIpv6, dnsRecords, firewall, collateralOf, syncthingFaults, configuredIp, nodeImageTags, freezableDockerRoot, symlinkedAppsFolder, arcane, shutdownd, telemetryd, fluxosJournal, arcaneHost, dnsd, zmqTopics, nodeZmqTopics, {
-      perNodeZmq, seedPolicyGrant, ipLocationSeeded, harnessClock, fluxDrive,
+      perNodeZmq, seedPolicyGrant, ipLocationSeeded, harnessClock, fluxDrive, unscanned, addressIndex,
     }, stubCapabilities);
     if (env.ipLocationSnapshot) await assertIpLocationSnapshotAdopted(env);
     return env;
@@ -1654,7 +1684,7 @@ async function assertIpLocationSnapshotAdopted(env) {
 async function _buildEnv(env, nodes, deferredNodes, legacyNodes, unprivilegedNodes, stubPeers, silentSyncPeers, unverifiableSyncPeers, policyUnawarePeers, stubPeerings, configOverrides, nodeConfigOverrides, nodeTiers, dataCenter, tickerAutostart, discoveryAutostart, nodeStatusOverrides, rpcFailures, bootContext, initialHeight, syncthing = 'stub', aptSeeded = true, aptBadSource = false, geolocation, locationTable, staticIp = true, policy = null, policySeeds = null, policyReachable = false, pm2Nodes = {}, pausedSyncthingNodes = [], sharedKeys = {}, networkShapes = {}, globalIpv6 = [], dnsRecords = [], firewall = false, collateralOf = {}, syncthingFaults = {}, configuredIp = {}, nodeImageTags = {}, freezableDockerRoot = [], symlinkedAppsFolder = [], arcane = false, shutdownd = 'none', telemetryd = 'none', fluxosJournal = false, arcaneHost = false, dnsd = 'none', zmqTopics, nodeZmqTopics, zmqOptions = {}, stubCapabilities) {
   const {
     perNodeZmq = false, seedPolicyGrant = true, ipLocationSeeded = true, harnessClock = false,
-    fluxDrive = 'stub',
+    fluxDrive = 'stub', unscanned = false, addressIndex = null,
   } = zmqOptions;
   // the bind mount and environment that put a container on the suite's clock, or null
   const clock = harnessClockFor(env.networkName, harnessClock);
@@ -1716,7 +1746,7 @@ async function _buildEnv(env, nodes, deferredNodes, legacyNodes, unprivilegedNod
   watchInfra(env, 'mongo', mongo);
 
   await seedMongo(MONGO_IP, nodes, bootContext, {
-    dataCenter, staticIp, initialHeight, policySeeds, arcane, seedPolicyGrant,
+    dataCenter, staticIp, initialHeight, policySeeds, arcane, seedPolicyGrant, unscanned,
   });
 
   const daemonStub = await new StaticIpContainer(image('flux-e2e-daemon-stub'))
@@ -1758,6 +1788,7 @@ async function _buildEnv(env, nodes, deferredNodes, legacyNodes, unprivilegedNod
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ nodes: runNodeList }),
   });
+  if (addressIndex) await seedAddressIndex(addressIndex);
   await fetch(`http://${DAEMON_IP}:18232/collateral-aliases`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

@@ -10,6 +10,7 @@
 // given it.
 import { readFileSync } from 'node:fs';
 import { gunzipSync } from 'node:zlib';
+import { Chain, appPaymentAddress } from '@runonflux/flux-spec';
 import { seedAddressDeltas } from './daemon-control.js';
 
 // The indexes a release keeps on each collection, as a node running 8.21.1
@@ -88,13 +89,17 @@ export function legacyPermanentMessages(corpus) {
 
 /**
  * Gives the daemon stub every corpus payment's position in its block, as its
- * address index answers it. The stub returns seeded deltas for every query, so
- * the address the payment was made to is not one the position is read by.
+ * address index answers it: under the address the payment was made to at its height.
  * @param {object} corpus
  */
 export async function seedPaymentPositions(corpus) {
   const deltas = corpus.messages.map((m) => ({
-    satoshis: m.valueSat, txid: m.txid, index: 0, blockindex: m.txIndex, height: m.height,
+    satoshis: m.valueSat,
+    txid: m.txid,
+    index: 0,
+    blockindex: m.txIndex,
+    height: m.height,
+    address: appPaymentAddress(Chain.HARNESS, m.height),
   }));
   for (let i = 0; i < deltas.length; i += DELTAS_PER_REQUEST) {
     // eslint-disable-next-line no-await-in-loop
