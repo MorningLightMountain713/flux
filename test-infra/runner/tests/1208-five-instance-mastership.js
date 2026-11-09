@@ -94,8 +94,8 @@ describe('the mastership grant with five instances', function () {
       tickerAutostart: false,
       // The founding photos pin committees at spec anchor heights, which
       // needs the ANCHORED membership history — the ZMQ delta machinery
-      // production runs. The harness default is the polling path, whose
-      // history carries no chain anchors and can never answer at-height.
+      // production runs. The polling path's history carries no chain
+      // anchors and can never answer at-height.
       zmqTopics: ALL_ZMQ_TOPICS,
       configOverrides: {
         daemon: grantPlaneDaemon(),

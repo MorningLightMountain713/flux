@@ -35,12 +35,10 @@ export const ALL_ZMQ_TOPICS_WITH_STATUS = [...ALL_ZMQ_TOPICS, 'fluxnodestatus'];
 export const ZMQ_NODE_PORT_BASE = 17123;
 export const zmqNodePort = (num) => ZMQ_NODE_PORT_BASE + Number(num);
 
-// What a fleet publishes unless a suite asks otherwise: nothing. Every suite written
-// before the stub could publish was validated against the polling path, and turning the
-// whole gate over to push as a side effect of adding a publisher would mean any failure
-// could be the suite or could be the switch. Suites that exercise the subscriptions ask
-// for ALL_ZMQ_TOPICS; the fleet default moves once the gate has run green with it.
-export const DEFAULT_ZMQ_TOPICS = [];
+// What a fleet publishes unless a suite asks otherwise: every fleet-wide topic, as a
+// production node's daemon does (flux_configd on Arcane, systemService elsewhere). A
+// suite about the polling path asks for fewer topics, or none.
+export const DEFAULT_ZMQ_TOPICS = ALL_ZMQ_TOPICS;
 
 /**
  * Writes one node's fluxd.conf: the committed fixture, with its zmqpub keys replaced by
