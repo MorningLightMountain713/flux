@@ -97,8 +97,7 @@ describe('loading express', () => {
     // the benchmark daemon (/flux/version, via the analytics node-IP refresh)
     // and to the daemon (/id/loginphrase, via the node-tier hardware check).
     sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves('127.0.0.1:16127');
-    sinon.stub(generalService, 'nodeTier').resolves('cumulus');
-    sinon.stub(generalService, 'nodeCollateral').resolves(1000);
+    sinon.stub(generalService, 'nodeCollateralTier').resolves({ collateral: 1000, tier: generalService.COLLATERAL_TIERS[1000] });
     // Port 0: the fixed apiport collides with the WebSocket servers the
     // communication tests bind on the same port number.
     await fluxServerHttp.listen(0);
