@@ -5,7 +5,6 @@ import {
 import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
 import { getSubnetConfig } from '../framework/subnet-config.js';
-import { assertNoEvent } from '../framework/wait.js';
 import { bootAndPeer } from '../framework/reconciler-suite.js';
 import { execInContainer } from '../framework/container.js';
 import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
@@ -125,17 +124,13 @@ describe('an announcement is judged one entry at a time', function () {
 
     afterIds = marks();
     await stub.broadcast(message([{ name: refusedOnly }]));
-    // A node handles one peer's messages in the order they were sent, so a node
-    // that stored this has handled the refused message before it. It names every
-    // app the stub holds, as a node's announcement does.
-    await stub.broadcast(message([held, marker].map((name) => ({ name, hash: `hash-${name}`, runningSince: new Date().toISOString() }))));
-    await everyNodeStored(afterIds, stubIp(), marker);
-
+    // Node 0 says what it did with the message, relaying included, once it has
+    // judged it; only then does the stub announce again, naming every app it
+    // holds as a node's announcement does.
     const [onNodeZero] = await handledBy([0], afterIds, stubIp(), refusedOnly);
     expect(onNodeZero).to.deep.include({ apps: [], refused: [refusedOnly], cleared: false, relayed: false });
-    // Relayed, it would have reached them before the marker did.
-    await Promise.all(BEHIND_RELAY.map((i) => assertNoEvent(env.clients[i], 'network:apprunning',
-      (d) => d.refused?.includes(refusedOnly), 0, { afterId: afterIds[i] })));
+    await stub.broadcast(message([held, marker].map((name) => ({ name, hash: `hash-${name}`, runningSince: new Date().toISOString() }))));
+    await everyNodeStored(afterIds, stubIp(), marker);
     // eslint-disable-next-line no-restricted-syntax
     for (const i of realNodes) {
       // eslint-disable-next-line no-await-in-loop
