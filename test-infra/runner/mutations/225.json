@@ -1,0 +1,32 @@
+[
+  {
+    "name": "store-keeps-contents-that-do-not-hash",
+    "breaks": "a node refuses contents that do not hash to the paid hash",
+    "edits": [
+      {
+        "file": "ZelBack/src/services/appMessaging/confirmedMessageStore.js",
+        "from": "  if (!event.verifyHash().valid) return 'contents do not hash to the paid hash';",
+        "to": "  if (false && !event.verifyHash().valid) return 'contents do not hash to the paid hash';"
+      }
+    ],
+    "red": [
+      "refuses contents that do not hash to their hash, and takes the message whole from an honest peer",
+      "keeps every message the chain paid for, as its owner signed it, at its own record"
+    ]
+  },
+  {
+    "name": "decider-applies-an-unauthorized-update",
+    "breaks": "a node's decider refuses an update its app's owner did not sign",
+    "edits": [
+      {
+        "file": "test-infra/flux-spec/dist/packages/spec-backend/src/decision/decisionRule.js",
+        "from": "  if (!authorized.valid) return refused(entry, name, 'unauthorized');",
+        "to": "  if (false && !authorized.valid) return refused(entry, name, 'unauthorized');"
+      }
+    ],
+    "red": [
+      "refuses a forged signature and a former owner's update",
+      "holds the newest valid message of every app"
+    ]
+  }
+]

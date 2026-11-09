@@ -1,114 +1,129 @@
-// fleet: 5
+// fleet: 6
 /*
- * A node that joins with more than 500 app messages to fetch takes them in bulk from a peer,
- * and keeps exactly the valid ones, each where its own scan of the chain placed it.
+ * A node that joins takes the app message log in batches from its peers and keeps exactly what
+ * the owners signed, each where its own record of the chain places it, though a peer lies.
  *
- * The message log is written straight into the peers' databases, and the joiner's payment
- * records into its own: they are what its scan of the chain would have found. Eleven apps carry
- * 556 messages between them - registrations, long update chains and an owner transfer - and the
- * peers serve some of them wrong:
- * - an older update claims a block above its app's newest, with another txid and payment;
- * - an update's contents no longer hash to its hash;
- * - an update carries a signature that is not its owner's;
- * - after the transfer, the former owner signs an update.
- * Every peer serves the same log, so whichever the joiner streams from, it is lied to.
+ * Eleven apps carry 555 messages between them - registrations, long update chains and an owner
+ * transfer - paid at chosen heights in the daemon's address index; every node starts with nothing
+ * scanned and records the payments from it. The honest peers are handed every message, among them
+ * an update whose signature is not its owner's and, after the transfer, an update the former owner
+ * signed: a node stores both, and its decider refuses them.
+ *
+ * One peer lies. It holds the same log but serves an update whose contents no longer hash to its
+ * hash, and another update with a block, txid and payment the chain does not give it. The joiner
+ * first reaches only that peer: it must refuse the altered message and keep the misplaced one at
+ * its own record. Then it reaches the honest peers, and takes the altered message whole.
  */
 import { describe, it, before, after } from 'mocha';
 import { expect } from 'chai';
 import { createHash } from 'node:crypto';
 import { createTestEnv } from '../framework/test-env.js';
-import { appOwnerKey, userKey } from '../framework/keys.js';
-import { signBtcMessage } from '../auth.js';
+import chainStart from '../framework/chain-start.cjs';
+import { authenticate, signBtcMessage } from '../auth.js';
+import { appOwnerKey, fluxTeamKey, userKey } from '../framework/keys.js';
 import { buildSeedableApp, buildSeedableUpdate } from '../framework/seed-helper.js';
 import { bootAndPeer } from '../framework/reconciler-suite.js';
-import { waitForDaemonReady, waitForOrchestratorState, waitFor } from '../framework/wait.js';
+import { handAppMessage } from '../framework/app-delivery.js';
+import { addressIndexOf, signedMessage } from '../framework/app-payments.js';
+import { partition, healPartition } from '../framework/partition.js';
+import { getSubnetConfig } from '../framework/subnet-config.js';
+import { waitForDaemonReady, waitFor } from '../framework/wait.js';
 import { dbClient } from '../framework/db-client.js';
 import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 
 const APPS = 10;
 const UPDATES = 54;
+const HONEST = [0, 1, 2, 3];
+const LIAR = 4;
 // The joiner: the last index, held back until the log is in place.
-const JOINER = 4;
+const JOINER = 5;
+// messages handed to each honest peer at once
+const HAND_CONCURRENCY = 20;
+// what each payment is worth: above every fee these specs owe
+const PAYMENT_SAT = 50e8;
 
 const sha256 = (data) => createHash('sha256').update(data).digest('hex');
-const unresolved = (entry) => ({ ...entry, message: false });
 
-describe('a node that joins takes the gap in bulk and keeps only valid messages', function () {
+describe('a node that joins takes the log in batches and keeps only what the owners signed', function () {
   let env;
   dumpLogsOnFailure(() => env);
 
   const stamp = Date.now();
-  // every message on chain, as the joiner's payment records place it
+  // every message on chain, in chain order, with its payment
   const onChain = [];
-  // what the peers serve, by hash
-  const served = new Map();
-  // the hashes the joiner must refuse
-  const refused = new Set();
   // the newest valid message of each app
   const governing = new Map();
-  let lie;
-  let bulkFetched;
+  // hashes the joiner's decider must refuse
+  const unauthorized = new Set();
+  let altered;
+  let misplaced;
+  let joinerIp;
+  // what the joiner held once only the lying peer had answered
+  let afterLiar;
+  let servedToJoiner;
 
-  const record = (message) => {
-    onChain.push(message);
-    served.set(message.hash, message.permanentMessage);
+  const onChainAt = (message, height) => {
+    onChain.push({
+      message: signedMessage(message), hash: message.hash, txid: sha256(`tx${message.hash}`), height, value: PAYMENT_SAT,
+    });
   };
 
-  before(async function () {
-    this.timeout(900000);
-    env = await createTestEnv({ hookCtx: this, nodes: 5, deferredNodes: 1 });
-    await bootAndPeer(env);
+  async function triggerHashCheck(client) {
+    const { zelidauth } = await authenticate(client.url, fluxTeamKey());
+    await client.getAuthed('/apps/checkhashes', zelidauth, { noCache: true });
+  }
 
-    const base = env.initialHeight - 2000;
+  async function heldByJoiner(hashes) {
+    return new Map((await dbClient(JOINER + 1).appMessages({ hash: { $in: hashes }, held: true })).map((m) => [m.hash, m]));
+  }
+
+  before(async function () {
+    this.timeout(1500000);
+    const base = chainStart.DEFAULT_INITIAL_HEIGHT - 2000;
     const owner = appOwnerKey();
     const newOwner = userKey();
+    // what the lying peer serves in place of the honest message, by hash
+    const lies = new Map();
 
     for (let k = 0; k < APPS; k += 1) {
       const name = `e2eBulk${k}x${stamp}`;
       // eslint-disable-next-line no-await-in-loop
-      let current = await buildSeedableApp({ env, name, height: base + (k * 60) });
-      record(current);
+      let current = await buildSeedableApp({ name });
+      onChainAt(current.message, base + (k * 60));
       const chain = [current];
       for (let j = 1; j <= UPDATES; j += 1) {
         // eslint-disable-next-line no-await-in-loop
-        current = await buildSeedableUpdate(current, (spec) => { spec.description = `${name} revision ${j}`; }, { height: base + (k * 60) + j });
-        record(current);
+        current = await buildSeedableUpdate(current, (spec) => { spec.description = `${name} revision ${j}`; });
+        onChainAt(current.message, base + (k * 60) + j);
         chain.push(current);
       }
       governing.set(name, current.hash);
 
       if (k === 0) {
-        // Signed by nobody who owns it: newest on chain, so it would govern the app if kept.
-        const forged = await buildSeedableUpdate(current, (spec) => { spec.description = `${name} forged`; }, { height: base + (k * 60) + UPDATES + 1 });
-        const { type, version, timestamp } = forged.permanentMessage;
-        const spec = forged.permanentMessage.appSpecifications;
+        // Signed by nobody who owns it, and newest on chain, so it would govern the app if applied.
+        const forged = await buildSeedableUpdate(current, (spec) => { spec.description = `${name} forged`; });
+        const { type, version, timestamp } = forged.message;
+        const spec = forged.message.appSpecifications;
         const signature = await signBtcMessage(`not this message ${timestamp}`, owner.privkey);
         const hash = sha256(type + version + JSON.stringify(spec) + timestamp + signature);
-        const badSignature = {
-          ...forged,
-          hash,
-          permanentMessage: { ...forged.permanentMessage, signature, hash },
-          hashEntry: { ...forged.hashEntry, hash },
-        };
-        record(badSignature);
-        refused.add(hash);
+        onChainAt({ ...forged.message, signature, hash }, base + (k * 60) + UPDATES + 1);
+        unauthorized.add(hash);
       }
       if (k === 1) {
-        // Mid-chain, and its contents changed in transit: they no longer hash to its hash.
-        const victim = chain[20];
-        const tampered = JSON.parse(JSON.stringify(victim.permanentMessage));
-        tampered.appSpecifications.description = `${name} altered in transit`;
-        served.set(victim.hash, tampered);
-        refused.add(victim.hash);
+        // Mid-chain; the lying peer serves its contents altered, so they no longer hash to its hash.
+        const victim = chain[20].message;
+        altered = { name, hash: victim.hash, description: victim.appSpecifications.description };
+        lies.set(victim.hash, {
+          ...signedMessage(victim),
+          appSpecifications: { ...victim.appSpecifications, description: `${name} altered in transit` },
+        });
       }
       if (k === 2) {
-        // An old update the peers place above the app's newest, with another txid and payment.
-        lie = { name, honest: chain[10], newest: current };
-        served.set(lie.honest.hash, {
-          ...lie.honest.permanentMessage,
-          height: current.hashEntry.height + 1,
-          txid: 'f'.repeat(64),
-          valueSat: 1,
+        // The lying peer places an old update above the app's newest, with another txid and payment.
+        const honest = chain[10].message;
+        misplaced = { name, hash: honest.hash, newest: current.hash };
+        lies.set(honest.hash, {
+          ...signedMessage(honest), height: base + (k * 60) + UPDATES + 1, txid: 'f'.repeat(64), valueSat: 1,
         });
       }
     }
@@ -116,34 +131,63 @@ describe('a node that joins takes the gap in bulk and keeps only valid messages'
     // Transferred to a new owner; then the former owner signs an update, then the new owner does.
     const transferName = `e2eBulkT${stamp}`;
     const transferBase = base + (APPS * 60);
-    const registration = await buildSeedableApp({ env, name: transferName, height: transferBase });
-    record(registration);
-    const transfer = await buildSeedableUpdate(registration, (spec) => { spec.owner = newOwner.zelid; }, { height: transferBase + 1 });
-    record(transfer);
-    const formerOwners = await buildSeedableUpdate(transfer, (spec) => { spec.description = `${transferName} by its former owner`; }, { height: transferBase + 2, signer: owner });
-    record(formerOwners);
-    refused.add(formerOwners.hash);
-    const newOwners = await buildSeedableUpdate(transfer, (spec) => { spec.description = `${transferName} by its new owner`; }, { height: transferBase + 3, signer: newOwner });
-    record(newOwners);
+    const registration = await buildSeedableApp({ name: transferName });
+    onChainAt(registration.message, transferBase);
+    const transfer = await buildSeedableUpdate(registration, (spec) => { spec.owner = newOwner.zelid; });
+    onChainAt(transfer.message, transferBase + 1);
+    const formerOwners = await buildSeedableUpdate(transfer, (spec) => { spec.description = `${transferName} by its former owner`; }, { signer: owner });
+    onChainAt(formerOwners.message, transferBase + 2);
+    unauthorized.add(formerOwners.hash);
+    const newOwners = await buildSeedableUpdate(transfer, (spec) => { spec.description = `${transferName} by its new owner`; }, { signer: newOwner });
+    onChainAt(newOwners.message, transferBase + 3);
     governing.set(transferName, newOwners.hash);
 
-    expect(onChain.length, 'enough messages missing to take the bulk path').to.be.above(500);
+    env = await createTestEnv({
+      hookCtx: this,
+      nodes: 6,
+      stubPeers: [LIAR],
+      stubCapabilities: { [LIAR]: ['peerExchange', 'appMessageBatch'] },
+      deferredNodes: 1,
+      unscanned: true,
+      addressIndex: addressIndexOf(onChain),
+    });
+    await bootAndPeer(env);
+    joinerIp = getSubnetConfig().nodeIp(JOINER + 1);
 
-    // The peers hold the log as they serve it; the joiner holds only the chain's payments.
-    const servedLog = [...served.values()];
-    const peerEntries = onChain.map((m) => m.hashEntry);
-    await Promise.all(env.clients.map(async (client, i) => {
-      if (!client) return;
-      await dbClient(i + 1).seedPermanentMessages(servedLog);
-      await dbClient(i + 1).seedAppHashes(peerEntries);
+    // The honest peers hold the log; each decides each message by its own rules.
+    await Promise.all(HONEST.map(async (peer) => {
+      const next = onChain.map(({ message }) => message);
+      await Promise.all(Array.from({ length: HAND_CONCURRENCY }, async () => {
+        while (next.length) {
+          // eslint-disable-next-line no-await-in-loop
+          await handAppMessage(env, next.shift(), [peer], { timeout: 300000, anyDecision: true });
+        }
+      }));
     }));
-    await dbClient(JOINER + 1).seedAppHashes(onChain.map((m) => unresolved(m.hashEntry)));
+    // The lying peer's log, given only now: the honest peers are not missing anything to ask it for.
+    const liar = env.stubPeerClients.get(LIAR);
+    await liar.loadBatchMessages(onChain.map(({ hash, message }) => lies.get(hash) ?? message));
 
+    // First the joiner reaches the lying peer alone.
     const joiner = await env.startNode(JOINER);
+    await partition(env, [JOINER], { cutChain: false, reachable: [LIAR] });
     await waitForDaemonReady(joiner);
+    await joiner.waitForEvent('peers:added', (d) => d.ip === liar.ip, 300000);
+    let mark = joiner.getLastEventId();
+    await triggerHashCheck(joiner);
+    await joiner.waitForEvent('hashSync:batchFetched', (d) => d.requests > 0, 600000, { afterId: mark });
+    servedToJoiner = new Set(await liar.batchHashesServedTo(joinerIp));
+    afterLiar = await heldByJoiner([altered.hash, misplaced.hash]);
+
+    // Then the honest peers.
+    await healPartition(env, [JOINER]);
+    mark = joiner.getLastEventId();
     await env.startDiscovery([JOINER]);
-    bulkFetched = await joiner.waitForEvent('hashSync:bulkFetched', (d) => d.processed > 0, 600000);
-    await waitForOrchestratorState(joiner, 'READY', 600000);
+    await joiner.waitForEvent('peers:added', (d) => HONEST.some((i) => getSubnetConfig().nodeIp(i + 1) === d.ip), 300000, { afterId: mark });
+    await triggerHashCheck(joiner);
+    await waitFor(async () => (await heldByJoiner(onChain.map((m) => m.hash))).size === onChain.length, {
+      timeout: 600000, interval: 5000, label: 'the joiner holds every message the chain paid for',
+    });
   });
 
   after(async function () {
@@ -151,40 +195,52 @@ describe('a node that joins takes the gap in bulk and keeps only valid messages'
     await env?.teardown();
   });
 
-  it('takes the gap in bulk from a peer', function () {
-    const valid = onChain.length - refused.size;
-    expect(bulkFetched.data.processed, JSON.stringify(bulkFetched.data)).to.equal(valid);
+  it('was served both lies by the lying peer, which alone it reached at first', function () {
+    expect(servedToJoiner.has(altered.hash), 'the altered message served').to.equal(true);
+    expect(servedToJoiner.has(misplaced.hash), 'the misplaced message served').to.equal(true);
   });
 
-  it('keeps every valid message, each at the txid, height and payment its own scan recorded', async function () {
-    const kept = new Map((await dbClient(JOINER + 1).permanentMessages()).map((m) => [m.hash, m]));
-    const expected = onChain.filter((m) => !refused.has(m.hash));
-    expect(kept.size, 'messages kept').to.equal(expected.length);
-    for (const message of expected) {
-      const stored = kept.get(message.hash);
-      expect(stored, `${message.hash} kept`).to.exist;
-      expect(stored.txid, `${message.hash} txid`).to.equal(message.hashEntry.txid);
-      expect(stored.height, `${message.hash} height`).to.equal(message.hashEntry.height);
-      expect(stored.valueSat, `${message.hash} payment`).to.equal(message.hashEntry.value);
-      expect(stored.signature, `${message.hash} signature`).to.equal(message.permanentMessage.signature);
-      expect(stored.appSpecifications.description, `${message.hash} contents`).to.equal(message.permanentMessage.appSpecifications.description);
+  it('refuses contents that do not hash to their hash, and takes the message whole from an honest peer', async function () {
+    expect(afterLiar.has(altered.hash), 'held once only the lying peer had answered').to.equal(false);
+    const held = (await heldByJoiner([altered.hash])).get(altered.hash);
+    expect(held.appSpecifications.description).to.equal(altered.description);
+  });
+
+  it('keeps a message a peer misplaced at the txid, height and payment its own record of the chain gives', function () {
+    const own = onChain.find((m) => m.hash === misplaced.hash);
+    const held = afterLiar.get(misplaced.hash);
+    expect(held, 'held from the lying peer').to.exist;
+    expect({ txid: held.txid, height: held.height, value: held.value }).to.deep.equal({ txid: own.txid, height: own.height, value: own.value });
+  });
+
+  it('keeps every message the chain paid for, as its owner signed it, at its own record', async function () {
+    const held = await heldByJoiner(onChain.map((m) => m.hash));
+    const wrong = onChain.filter((m) => {
+      const stored = held.get(m.hash);
+      return !stored || stored.txid !== m.txid || stored.height !== m.height || stored.value !== m.value
+        || stored.signature !== m.message.signature
+        || stored.appSpecifications.description !== m.message.appSpecifications.description;
+    }).map((m) => m.hash);
+    expect(wrong, `${wrong.length} of ${onChain.length} not held as signed at their own record`).to.deep.equal([]);
+  });
+
+  it('refuses a forged signature and a former owner\'s update', async function () {
+    const joiner = env.clients[JOINER];
+    for (const hash of unauthorized) {
+      // eslint-disable-next-line no-await-in-loop
+      const { status, data } = await joiner.request('GET', `/v2/apps/messages/${hash}/decision`);
+      expect(status, hash).to.equal(200);
+      expect(data.data, hash).to.include({ decision: 'refused', reason: 'unauthorized' });
     }
   });
 
-  it('refuses a message that does not hash to itself, a forged signature and a former owner\'s update', async function () {
-    const kept = new Set((await dbClient(JOINER + 1).permanentMessages()).map((m) => m.hash));
-    for (const hash of refused) expect(kept.has(hash), `${hash} refused`).to.equal(false);
-    const records = await dbClient(JOINER + 1).appHashRecords({ hash: { $in: [...refused] } });
-    expect(records.filter((r) => r.message === true), 'no refused hash marked resolved').to.deep.equal([]);
-  });
-
-  it('holds the newest valid message of every app, by its own record of the chain', async function () {
-    this.timeout(120000);
+  it('holds the newest valid message of every app', async function () {
+    this.timeout(300000);
     const db = dbClient(JOINER + 1);
     await waitFor(async () => {
       const held = await Promise.all([...governing.keys()].map(async (name) => (await db.globalAppSpec(name))?.hash));
       return held.every((hash, i) => hash === [...governing.values()][i]);
-    }, { timeout: 90000, interval: 3000, label: 'every app held at its newest valid message' });
-    expect((await db.globalAppSpec(lie.name)).hash, 'the app the peers misplaced').to.equal(lie.newest.hash);
+    }, { timeout: 240000, interval: 5000, label: 'every app held at its newest valid message' });
+    expect((await db.globalAppSpec(misplaced.name)).hash, 'the app whose message the peer misplaced').to.equal(misplaced.newest);
   });
 });
