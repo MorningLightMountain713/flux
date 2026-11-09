@@ -24,6 +24,7 @@ const { getSpec } = require('../../ZelBack/src/services/utils/specLibs');
 const policyStore = require('../../ZelBack/src/services/policyStore');
 const { loadSpecLibrary } = require('./fixtures/fluxSpec');
 const { stubMessages, stubManifests } = require('./fixtures/appRecords');
+const { MAX_FRAME_BYTES, MAX_REQUEST_HASHES } = require('../../ZelBack/src/services/appMessaging/messageBatchRequests');
 
 chai.use(chaiAsPromised);
 const { expect } = chai;
@@ -887,6 +888,108 @@ describe('fluxCommunicationMessagesSender tests', () => {
       sinon.assert.notCalled(myMessageCacheSetStub);
       sinon.assert.notCalled(getPermanentMessageSpy);
       sinon.assert.calledOnceWithExactly(myMessageCacheGetStub, callMessage.data.hash);
+    });
+  });
+
+  describe('a fluxapprequest v3 is answered in message batches', () => {
+    let peer;
+    let messages;
+
+    before(async function loadLibrary() {
+      this.timeout(30_000);
+      await loadSpecLibrary();
+    });
+
+    // Every frame the peer was sent, in order, as its data.
+    const frames = () => peer.sendAsync.getCalls().map((c) => JSON.parse(c.args[0]).data);
+    const request = (hashes, requestId = 'request-1') => ({
+      timestamp: Date.now(),
+      data: {
+        type: 'fluxapprequest', version: 3, hashes, requestId,
+      },
+    });
+    // A held record whose contents are about `bytes` long once serialized.
+    const held = (hash, bytes = 1000) => ({
+      hash,
+      isHeld: true,
+      contents: {
+        type: 'fluxappregister', version: 1, timestamp: 1, signature: 'sig', appSpecifications: { padding: 'x'.repeat(bytes) },
+      },
+    });
+
+    beforeEach(() => {
+      peer = { key: '198.51.100.9:16127', sendAsync: sinon.stub().resolves(), send: sinon.stub() };
+      sinon.stub(fluxNetworkHelper, 'getFluxNodePublicKey').returns('0474eb4690689bb408139249eda7f361b7881c4254ccbe303d3b4d58c2b48897d0f070b44944941998551f9ea0e1befd96f13adf171c07c885e62d0c2af56d3dab');
+      sinon.stub(fluxNetworkHelper, 'getFluxNodePrivateKey').returns('5JTeg79dTLzzHXoJPALMWuoGDM8QmLj4n5f6MeFjx8dzsirvjAh');
+      messages = stubMessages();
+    });
+
+    afterEach(() => {
+      sinon.restore();
+    });
+
+    it('answers with the held contents in frames of at most MAX_FRAME_BYTES of messages, the last marked done', async () => {
+      const third = Math.floor(MAX_FRAME_BYTES / 3);
+      messages.byHashes.resolves(['a', 'b', 'c', 'd', 'e'].map((hash) => held(hash, third)));
+
+      await fluxCommunicationMessagesSender.respondWithAppMessage(request(['a', 'b', 'c', 'd', 'e']), peer);
+
+      const sent = frames();
+      expect(sent.map((frame) => frame.messages.map((m) => m.hash))).to.deep.equal([['a', 'b'], ['c', 'd'], ['e']]);
+      expect(sent.map((frame) => frame.done)).to.deep.equal([false, false, true]);
+      for (const frame of sent) {
+        expect(frame).to.include({ type: 'fluxappmessagesync', version: 1, requestId: 'request-1' });
+        const bytes = frame.messages.reduce((total, m) => total + Buffer.byteLength(JSON.stringify(m), 'utf8'), 0);
+        expect(bytes).to.be.at.most(MAX_FRAME_BYTES);
+      }
+      sinon.assert.notCalled(peer.send);
+    });
+
+    it('serves each message as signed, with its hash', async () => {
+      const record = held('a');
+      messages.byHashes.resolves([record]);
+
+      await fluxCommunicationMessagesSender.respondWithAppMessage(request(['a']), peer);
+
+      expect(frames()[0].messages).to.deep.equal([{ ...record.contents, hash: 'a' }]);
+    });
+
+    it('leaves out a hash it does not hold, and asks the collection for each hash once', async () => {
+      messages.byHashes.resolves([held('a'), { hash: 'b', isHeld: false, contents: null }]);
+
+      await fluxCommunicationMessagesSender.respondWithAppMessage(request(['a', 'b', 'a', 'c']), peer);
+
+      sinon.assert.calledOnceWithExactly(messages.byHashes, ['a', 'b', 'c']);
+      const sent = frames();
+      expect(sent).to.have.length(1);
+      expect(sent[0].messages.map((m) => m.hash)).to.deep.equal(['a']);
+      expect(sent[0].done).to.equal(true);
+    });
+
+    it('answers with one frame marked done and no messages when it holds none', async () => {
+      await fluxCommunicationMessagesSender.respondWithAppMessage(request(['a']), peer);
+
+      expect(frames()).to.deep.equal([{
+        type: 'fluxappmessagesync', version: 1, requestId: 'request-1', messages: [], done: true,
+      }]);
+    });
+
+    it('sends a message larger than MAX_FRAME_BYTES in a frame alone', async () => {
+      messages.byHashes.resolves([held('small'), held('large', MAX_FRAME_BYTES + 1), held('after')]);
+
+      await fluxCommunicationMessagesSender.respondWithAppMessage(request(['small', 'large', 'after']), peer);
+
+      expect(frames().map((frame) => frame.messages.map((m) => m.hash))).to.deep.equal([['small'], ['large'], ['after']]);
+    });
+
+    it('refuses a request naming more than MAX_REQUEST_HASHES, or with no requestId, and sends nothing', async () => {
+      const tooMany = Array.from({ length: MAX_REQUEST_HASHES + 1 }, (_, i) => `h${i}`);
+      await fluxCommunicationMessagesSender.respondWithAppMessage(request(tooMany), peer);
+      await fluxCommunicationMessagesSender.respondWithAppMessage(request(['a'], ''), peer);
+      await fluxCommunicationMessagesSender.respondWithAppMessage(request([7]), peer);
+
+      sinon.assert.notCalled(messages.byHashes);
+      sinon.assert.notCalled(peer.sendAsync);
     });
   });
 

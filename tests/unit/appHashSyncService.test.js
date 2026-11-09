@@ -3,11 +3,10 @@
 const { expect } = require('chai');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
-const { Readable } = require('stream');
 const config = require('config');
 const { Privilege, authOf } = require('../../ZelBack/src/services/utils/privileges');
 const {
-  loadSpecLibrary, v8Spec,
+  loadSpecLibrary,
 } = require('./fixtures/fluxSpec');
 const { HASH_RETRY_BACKOFF } = require('../../ZelBack/src/services/utils/appConstants');
 const { appSyncEvents, EVENTS } = require('../../ZelBack/src/services/utils/appSyncEvents');
@@ -17,18 +16,6 @@ const { appSyncEvents, EVENTS } = require('../../ZelBack/src/services/utils/appS
 // transport and the explorer HTTP calls, the daemon RPCs, the signature gate
 // (appEventVerifier.authorize) and the fork-activation height gate.
 let flux;
-
-// Two real owner addresses. An update is judged against the owner the app
-// ALREADY has, so both halves of that comparison have to be addresses the real
-// classes accept — 'oldOwner' / 'newOwner' / 'owner1' never were.
-const OLD_OWNER = '19z6SjrVrWqBTLiCXWLRjcu9ydnzWNz3UD';
-const NEW_OWNER = '1EHNa6Q4Jz2uvNExL497mE43ikXhwF6kZm';
-
-function makeStreamResponse(data) {
-  const json = JSON.stringify({ status: 'success', data });
-  const stream = new Readable({ read() { this.push(json); this.push(null); } });
-  return { data: stream, headers: {} };
-}
 
 /**
  * `specCutover.deserializeSpec` stays stubbed because the wrapper registers the
@@ -52,29 +39,6 @@ function makeDeserializeMessageStub() {
   return sinon.stub().callsFake(async (msg) => (msg.version === 2
     ? flux.ConfirmedAppEvent.deserialize(msg)
     : flux.ConfirmedAppEventLegacy.deserialize(msg, { chain: flux.Chain.MAIN })));
-}
-
-/**
- * A permanent-message document carrying a REAL serialized spec — the shape a
- * peer's /apps/permanentmessages actually streams. The envelope version stays
- * at the legacy 4 while the spec inside is v8, so the two versions are
- * distinguishable: the service must gate on the parsed spec's version.
- */
-async function legacyMessage({
-  type, hash, txid, height, name, owner, timestamp,
-}) {
-  const spec = await v8Spec({ name, owner: owner ?? OLD_OWNER });
-  return {
-    type,
-    version: 4,
-    hash,
-    timestamp: timestamp ?? Date.now(),
-    signature: `sig-${hash}`,
-    appSpecifications: spec.serialize(),
-    valueSat: 1e8,
-    txid,
-    height,
-  };
 }
 
 describe('appHashSyncService tests', () => {
@@ -109,28 +73,40 @@ describe('appHashSyncService tests', () => {
     };
   }
 
-  // The store, doubled: every hash is paid, in the order given; an event is
-  // built by the suite's deserializer; storing writes through the collection
-  // the suite reads. Its own rules are confirmedMessageStore.test.js's.
-  function makeStoreDouble(verifier, collection) {
-    return {
-      paymentRecords: sinon.stub().callsFake(async (hashes) => new Map(hashes.map((hash, txIndex) => [hash, {
-        hash, txid: `tx-${hash}`, height: 1, txIndex, value: 1e8,
-      }]))),
-      confirmedEvent: sinon.stub().callsFake((contents) => verifier().deserializeMessage(contents)),
-      storeConfirmedMessages: sinon.stub().callsFake(async (admitted) => {
-        if (admitted.length) await collection().insertMany(admitted);
-        return {
-          stored: admitted.map((contents) => ({ event: contents })), alreadyStored: [], unpaid: [], refused: [],
-        };
-      }),
+  // A peer that answers message batches.
+  function makeBatchPeer(ip) {
+    return { ...makePeer(ip, '16127'), remoteCapabilities: new Set(['appMessageBatch']) };
+  }
+
+  // The batch requests, doubled: each request settles at once with what
+  // `answer(peerKey, hashes)` says; its own rules are messageBatchRequests.test.js's.
+  // Three hashes to a request, so a handful of hashes makes several.
+  let batchDouble;
+  function makeBatchDouble() {
+    const double = {
+      CAPABILITY: 'appMessageBatch',
+      MAX_REQUEST_HASHES: 3,
+      requests: [],
+      answer: (peerKey, hashes) => ({ stored: hashes.length, missing: [], closed: false }),
     };
+    double.openRequest = sinon.stub().callsFake((peerKey, hashes) => {
+      double.requests.push({ peerKey, hashes });
+      const requestId = `request-${double.requests.length}`;
+      return {
+        requestId,
+        message: {
+          type: 'fluxapprequest', version: 3, hashes, requestId,
+        },
+        done: Promise.resolve({ requestId, peerKey, ...double.answer(peerKey, hashes) }),
+      };
+    });
+    return double;
   }
 
   function buildProxyquireStubs(overrides = {}) {
     return {
       '../appDatabase/appRecords': { messages: () => messagesStub },
-      './confirmedMessageStore': makeStoreDouble(() => appEventVerifierStub, () => collectionStub),
+      './messageBatchRequests': batchDouble,
       '../dbHelper': dbHelperStub,
       '../messageHelper': messageHelperStub,
       '../serviceHelper': serviceHelperStub,
@@ -160,6 +136,7 @@ describe('appHashSyncService tests', () => {
   }
 
   beforeEach(() => {
+    batchDouble = makeBatchDouble();
     // The app messages: the payments awaiting contents are what a test seeds
     // dbHelperStub.findInDatabase with; every mark is a stub.
     messagesStub = {
@@ -382,32 +359,6 @@ describe('appHashSyncService tests', () => {
       await first;
     });
 
-    it('should use bulk fetch when many hashes are missing', async () => {
-
-      const manyMissing = Array(1500).fill(null).map((_, i) => ({
-        hash: `hash${i}`, txid: `tx${i}`, height: 1000 + i, value: 100, message: false,
-      }));
-
-      // First call: getMissingHashes returns many
-      // Subsequent calls (after bulk fetch): return empty
-      dbHelperStub.findInDatabase.onFirstCall().resolves(manyMissing);
-      dbHelperStub.findInDatabase.resolves([]);
-      dbHelperStub.findOneInDatabase.resolves(null);
-
-      serviceHelperStub.axiosGet.callsFake((url) => {
-        if (url.includes('permanentmessages')) return Promise.resolve(makeStreamResponse([]));
-        return Promise.resolve({ data: { status: 'success', data: true } });
-      });
-
-      dbHelperStub.findOneInDatabase.resolves({ generalScannedHeight: 2_555_000 });
-
-      await appHashSyncService.syncMissingHashes();
-
-      // Should have attempted bulk fetch (axiosGet called for explorer sync check + permanent messages)
-      expect(serviceHelperStub.axiosGet.called).to.be.true;
-      expect(logStub.info.calledWith(sinon.match('streaming bulk fetch'))).to.be.true;
-    });
-
     it('should propagate errors to caller', async () => {
       dbHelperStub.findInDatabase.rejects(new Error('DB error'));
 
@@ -613,6 +564,116 @@ describe('appHashSyncService tests', () => {
     });
   });
 
+  describe('syncMissingHashes in batches', () => {
+    const missingOf = (hashes) => hashes.map((hash, i) => ({
+      hash, txid: `tx-${hash}`, height: 100 + i, value: 10, message: false,
+    }));
+    let batchPeers;
+    let plainPeer;
+
+    beforeEach(() => {
+      batchPeers = [makeBatchPeer('10.0.1.1'), makeBatchPeer('10.0.1.2')];
+      plainPeer = makePeer('10.0.1.3', '16127');
+      // The plain peer first, so a requester that asked any peer would ask it.
+      const all = [plainPeer, ...batchPeers];
+      peerManagerStub.allValues.returns(all);
+      peerManagerStub.get = (key) => all.find((peer) => peer.key === key);
+      dbHelperStub.findOneInDatabase.resolves({ generalScannedHeight: 2_555_000 });
+    });
+
+    it('asks only peers that answer batches, MAX_REQUEST_HASHES at a time, each request signed and sent to its peer', async () => {
+      // More requests than the batch peers hold open at once.
+      const hashes = Array.from({ length: 16 }, (_, i) => `h${i + 1}`);
+      dbHelperStub.findInDatabase.onFirstCall().resolves(missingOf(hashes));
+      dbHelperStub.findInDatabase.resolves([]);
+
+      await appHashSyncService.syncMissingHashes();
+
+      const chunks = batchDouble.requests.map((request) => request.hashes);
+      expect(chunks).to.have.length(6);
+      expect(chunks.flat()).to.have.members(hashes);
+      expect(chunks.every((chunk) => chunk.length <= 3)).to.equal(true);
+      const askedOf = new Set(batchDouble.requests.map((request) => request.peerKey));
+      expect([...askedOf]).to.not.include(plainPeer.key);
+      const signedV3 = fluxBroadcastHelperStub.serialiseAndSignFluxBroadcast.getCalls().map((call) => call.args[0]).filter((message) => message.version === 3);
+      expect(signedV3.map((message) => message.requestId)).to.have.members(batchDouble.requests.map((_, i) => `request-${i + 1}`));
+      const sends = batchPeers.reduce((total, peer) => total + peer.send.callCount, 0);
+      expect(sends).to.equal(6);
+      sinon.assert.notCalled(plainPeer.send);
+    });
+
+    it('asks a peer not yet asked for what a request left unheld, and never asks one peer twice for a hash', async () => {
+      const [empty, full] = batchPeers;
+      batchDouble.answer = (peerKey, hashes) => (peerKey === empty.key
+        ? { stored: 0, missing: hashes, closed: false }
+        : { stored: hashes.length, missing: [], closed: false });
+      dbHelperStub.findInDatabase.onFirstCall().resolves(missingOf(['h1', 'h2', 'h3', 'h4', 'h5', 'h6']));
+      dbHelperStub.findInDatabase.resolves([]);
+
+      await appHashSyncService.syncMissingHashes();
+
+      const askedOf = (key) => batchDouble.requests.filter((request) => request.peerKey === key).flatMap((request) => request.hashes);
+      expect(askedOf(full.key)).to.have.members(['h1', 'h2', 'h3', 'h4', 'h5', 'h6']);
+      expect(new Set(askedOf(empty.key)).size).to.equal(askedOf(empty.key).length);
+      expect(new Set(askedOf(full.key)).size).to.equal(askedOf(full.key).length);
+    });
+
+    it('asks nothing more of a peer whose connection is gone, and asks another for its hashes', async () => {
+      const [gone, staying] = batchPeers;
+      batchDouble.answer = (peerKey, hashes) => {
+        if (peerKey === gone.key) {
+          peerManagerStub.get = (key) => (key === gone.key ? undefined : [staying, plainPeer].find((peer) => peer.key === key));
+          return { stored: 0, missing: hashes, closed: true };
+        }
+        return { stored: hashes.length, missing: [], closed: false };
+      };
+      dbHelperStub.findInDatabase.onFirstCall().resolves(missingOf(['h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'h7', 'h8', 'h9']));
+      dbHelperStub.findInDatabase.resolves([]);
+
+      await appHashSyncService.syncMissingHashes();
+
+      expect(batchDouble.requests.filter((request) => request.peerKey === gone.key).length).to.be.at.most(2);
+      const fromStaying = batchDouble.requests.filter((request) => request.peerKey === staying.key).flatMap((request) => request.hashes);
+      expect(fromStaying).to.have.members(['h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'h7', 'h8', 'h9']);
+    });
+
+    it('leaves to the v2 rounds the hashes no peer that answers batches holds', async () => {
+      batchDouble.answer = (peerKey, hashes) => ({ stored: 0, missing: hashes, closed: false });
+      const missing = missingOf(['h1', 'h2']);
+      dbHelperStub.findInDatabase.onFirstCall().resolves(missing);
+      dbHelperStub.findInDatabase.onSecondCall().resolves(missing);
+      dbHelperStub.findInDatabase.resolves([]);
+
+      await appHashSyncService.syncMissingHashes();
+
+      expect(batchDouble.requests.length).to.equal(2);
+      const v2 = fluxBroadcastHelperStub.serialiseAndSignFluxBroadcast.getCalls().map((call) => call.args[0]).filter((message) => message.version === 2);
+      expect(v2).to.have.length.at.least(1);
+      expect(v2[0].hashes).to.deep.equal(['h1', 'h2']);
+    });
+
+    it('asks by v2 alone when no peer answers batches', async () => {
+      peerManagerStub.allValues.returns([plainPeer, makePeer('10.0.1.4', '16127'), makePeer('10.0.1.5', '16127')]);
+      dbHelperStub.findInDatabase.onFirstCall().resolves(missingOf(['h1']));
+      dbHelperStub.findInDatabase.resolves([]);
+
+      await appHashSyncService.syncMissingHashes();
+
+      sinon.assert.notCalled(batchDouble.openRequest);
+      const v2 = fluxBroadcastHelperStub.serialiseAndSignFluxBroadcast.getCalls().map((call) => call.args[0]).filter((message) => message.version === 2);
+      expect(v2[0].hashes).to.deep.equal(['h1']);
+    });
+
+    it('makes no HTTP call to a peer', async () => {
+      dbHelperStub.findInDatabase.onFirstCall().resolves(missingOf(['h1', 'h2', 'h3', 'h4']));
+      dbHelperStub.findInDatabase.resolves([]);
+
+      await appHashSyncService.syncMissingHashes();
+
+      sinon.assert.notCalled(serviceHelperStub.axiosGet);
+    });
+  });
+
   describe('resetHashSyncForUpgrade', () => {
     it('resets the sync state of every payment awaiting contents from the height', async () => {
       messagesStub.resetSyncState.resolves(10);
@@ -707,20 +768,24 @@ describe('appHashSyncService tests', () => {
       assertExpiryBehavior();
     });
 
-    it('should use retryFromHeight for expiry via bulk fetch path', async () => {
+    it('should use retryFromHeight for expiry for a hash no batch peer holds', async () => {
       const { recentRetry, oldRetry } = makeExpiryTestHashes();
-      const padding = Array(500).fill(null).map((_, i) => ({
-        hash: `pad${i}`, txid: `ptx${i}`, height: 500_000, value: 10, message: false,
+      const held = Array(5).fill(null).map((_, i) => ({
+        hash: `held${i}`, txid: `htx${i}`, height: 500_000, value: 10, message: false,
         syncAttempts: 0, retryFromHeight: 500_000, nextRetryHeight: 2_555_000,
       }));
-
-      dbHelperStub.findInDatabase.onFirstCall().resolves([recentRetry, oldRetry, ...padding]);
-      dbHelperStub.findInDatabase.resolves([recentRetry, oldRetry]);
-
-      serviceHelperStub.axiosGet.callsFake((url) => {
-        if (url.includes('permanentmessages')) return Promise.resolve(makeStreamResponse([]));
-        return Promise.resolve({ data: { status: 'success', data: true } });
+      const batchPeer = makeBatchPeer('10.0.0.9');
+      peerManagerStub.allValues.returns([...peerManagerStub.allValues(), batchPeer]);
+      peerManagerStub.get = (key) => (key === batchPeer.key ? batchPeer : undefined);
+      const unheldByPeers = new Set([recentRetry.hash, oldRetry.hash]);
+      batchDouble.answer = (peerKey, hashes) => ({
+        stored: hashes.filter((hash) => !unheldByPeers.has(hash)).length,
+        missing: hashes.filter((hash) => unheldByPeers.has(hash)),
+        closed: false,
       });
+
+      dbHelperStub.findInDatabase.onFirstCall().resolves([recentRetry, oldRetry, ...held]);
+      dbHelperStub.findInDatabase.resolves([recentRetry, oldRetry]);
 
       advanceDateOnDelay();
       try {
@@ -729,107 +794,8 @@ describe('appHashSyncService tests', () => {
         Date.now.restore();
       }
 
+      expect(batchDouble.requests.flatMap((request) => request.hashes)).to.include.members([recentRetry.hash, oldRetry.hash]);
       assertExpiryBehavior();
-    });
-  });
-
-  describe('processMessages via bulk fetch', () => {
-    let localModule;
-    let localCollectionStub;
-    let localDbHelperStub;
-    let localAppEventVerifierStub;
-    let localLogStub;
-    let localStore;
-
-    beforeEach(() => {
-      localCollectionStub = {
-        bulkWrite: sinon.stub().resolves({ ok: 1 }),
-        insertMany: sinon.stub().resolves({ insertedCount: 0 }),
-        find: sinon.stub().returns({
-          project: sinon.stub().returns({
-            sort: sinon.stub().returns({ toArray: sinon.stub().resolves([]) }),
-            toArray: sinon.stub().resolves([]),
-          }),
-        }),
-        updateMany: sinon.stub().resolves({ modifiedCount: 0 }),
-      };
-      const mockDatabase = { collection: sinon.stub().returns(localCollectionStub) };
-      localDbHelperStub = {
-        databaseConnection: sinon.stub().returns({ db: sinon.stub().returns(mockDatabase) }),
-        findInDatabase: sinon.stub().resolves([]),
-        findOneInDatabase: sinon.stub(),
-      };
-
-      localAppEventVerifierStub = {
-        deserializeMessage: makeDeserializeMessageStub(),
-        authorize: sinon.stub().resolves(),
-      };
-
-      localStore = makeStoreDouble(() => localAppEventVerifierStub, () => localCollectionStub);
-
-      localLogStub = {
-        error: sinon.stub(),
-        info: sinon.stub(),
-        warn: sinon.stub(),
-      };
-
-      localModule = proxyquire('../../ZelBack/src/services/appMessaging/appHashSyncService', {
-        '../dbHelper': localDbHelperStub,
-        '../messageHelper': messageHelperStub,
-        '../serviceHelper': serviceHelperStub,
-        '../verificationHelper': verificationHelperStub,
-        '../../lib/log': localLogStub,
-        './messageVerifier': messageVerifierStub,
-        './appEventVerifier': localAppEventVerifierStub,
-        '../utils/fluxBroadcastHelper': fluxBroadcastHelperStub,
-        '../invalidMessages': { invalidMessages: [] },
-        '../utils/peerState': { peerManager: peerManagerStub },
-        '../fluxCommunicationUtils': { deterministicFluxList: sinon.stub().resolves([]) },
-        '../fluxCommunication': { openEphemeralConnection: sinon.stub().resolves(null) },
-        '../fluxNetworkHelper': { getLocalSocketAddress: sinon.stub().resolves('10.0.0.99:16127') },
-        './confirmedMessageStore': localStore,
-        '../appDatabase/appRecords': {
-          messages: () => ({
-            awaitingContents: () => localDbHelperStub.findInDatabase(),
-            markSyncAttempt: async () => {},
-            markNotFound: async () => {},
-          }),
-        },
-      });
-    });
-
-    it('hands everything a peer sent to the store, and judges nothing', async () => {
-      // An update signed by someone other than the app's owner, and one of a
-      // version not active at its height: both are the decider's to refuse.
-      const bulkMessages = [
-        await legacyMessage({
-          type: 'fluxappupdate', hash: 'hash1', txid: 'tx1', height: 1000, name: 'testapp', owner: NEW_OWNER,
-        }),
-        await legacyMessage({
-          type: 'fluxappupdate', hash: 'hash2', txid: 'tx2', height: 1001, name: 'testapp', owner: OLD_OWNER,
-        }),
-      ];
-
-      const manyMissing = Array(600).fill(null).map((_, i) => ({
-        hash: `hash${i}`, txid: `tx${i}`, height: 1000 + i, value: 100, message: false,
-      }));
-      let getMissingCalls = 0;
-      localDbHelperStub.findInDatabase.callsFake(() => {
-        getMissingCalls += 1;
-        return Promise.resolve(getMissingCalls === 1 ? manyMissing : []);
-      });
-      localDbHelperStub.findOneInDatabase.resolves({ generalScannedHeight: 2_555_000 });
-      serviceHelperStub.axiosGet.callsFake((url) => (url.includes('permanentmessages')
-        ? Promise.resolve(makeStreamResponse(bulkMessages))
-        : Promise.resolve({ data: { status: 'success', data: true } })));
-
-      await localModule.syncMissingHashes();
-
-      const store = localStore.storeConfirmedMessages;
-      sinon.assert.called(store);
-      const handed = store.getCalls().flatMap((call) => call.args[0]).map((m) => m.hash);
-      expect(handed).to.include.members(['hash1', 'hash2']);
-      sinon.assert.notCalled(localAppEventVerifierStub.authorize);
     });
   });
 

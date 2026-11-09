@@ -38,6 +38,7 @@ const ORDERED_TYPES = [
   'fluxappinstallingerrorssync',
   'fluxappcontentmanifestindex', 'fluxappcontentmanifestsync',
   'fluxappingressindex', 'fluxappingresssync',
+  'fluxappmessagesync',
 ];
 
 describe('messageRoutes tests', () => {

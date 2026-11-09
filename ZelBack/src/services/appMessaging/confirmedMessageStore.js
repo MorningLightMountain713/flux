@@ -184,6 +184,8 @@ async function storeConfirmedMessages(candidates) {
   const hashes = [...new Set(candidates.map((candidate) => candidate.hash))];
   const existing = new Set((await messages.byHashes(hashes)).filter((record) => record.isHeld).map((record) => record.hash));
   const records = await paymentRecords(hashes);
+  // The messages that passed their checks, written together after the loop.
+  const accepted = [];
   const seen = new Set();
   for (const candidate of candidates) {
     const { hash } = candidate;
@@ -227,10 +229,17 @@ async function storeConfirmedMessages(candidates) {
         await messages.setBlockTime(hash, event.registeredAt);
       }
     }
-    // eslint-disable-next-line no-await-in-loop
-    const { stored } = await messages.storeContents(contents);
-    if (stored) result.stored.push({ hash, event, record });
-    else result.alreadyStored.push(hash);
+    accepted.push({
+      hash, event, record, contents,
+    });
+  }
+  if (accepted.length) {
+    const written = await messages.storeContentsMany(accepted.map(({ contents }) => contents));
+    const stored = new Set(written.stored);
+    for (const { hash, event, record } of accepted) {
+      if (stored.has(hash)) result.stored.push({ hash, event, record });
+      else result.alreadyStored.push(hash);
+    }
   }
   const resolved = [...result.stored.map(({ hash }) => hash), ...result.alreadyStored];
   notifyStored(resolved);

@@ -143,10 +143,13 @@ function makeBaseStubs(overrides = {}) {
     byHashes: sinon.stub().callsFake(async (hashes) => hashes.filter((hash) => messages.held.has(hash)).map((hash) => ({ hash, isHeld: true }))),
     payments: sinon.stub().callsFake(async (hashes) => new Map(chain.paid ? hashes.map((hash) => [hash, { hash, ...chain }]) : [])),
     setBlockTime: sinon.stub().resolves(),
-    storeContents: sinon.stub().callsFake(async (contents) => {
-      await stubs['../appDatabase/appsRepository'].storePermanentMessage(contents);
-      messages.held.add(contents.hash);
-      return { stored: true };
+    storeContentsMany: sinon.stub().callsFake(async (list) => {
+      for (const contents of list) {
+        // eslint-disable-next-line no-await-in-loop
+        await stubs['../appDatabase/appsRepository'].storePermanentMessage(contents);
+        messages.held.add(contents.hash);
+      }
+      return { stored: list.map((contents) => contents.hash), alreadyStored: [] };
     }),
   };
   stubs['../appDatabase/appRecords'] = { messages: () => messages };

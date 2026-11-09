@@ -42,6 +42,11 @@ const FLUX_CAPABILITIES = Object.freeze([
   // and as a juror it honours a stop code only with one. A peer that does not
   // claim it is sent the close alone.
   'processStop',
+  // This build answers a fluxapprequest v3 - a list of message hashes - with the
+  // contents it holds in signed fluxappmessagesync frames, capped by bytes, the
+  // last naming the hashes it does not hold. A peer that does not claim it is
+  // asked by v2, one message per hash.
+  'appMessageBatch',
 ]);
 
 module.exports = { FLUX_CAPABILITIES };

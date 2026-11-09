@@ -1,12 +1,10 @@
 'use strict';
 
-const zlib = require('zlib');
-const { StringDecoder } = require('string_decoder');
 const config = require('config');
 const messageHelper = require('../messageHelper');
 const verificationHelper = require('../verificationHelper');
 const serviceHelper = require('../serviceHelper');
-const confirmedMessageStore = require('./confirmedMessageStore');
+const messageBatchRequests = require('./messageBatchRequests');
 const { serialiseAndSignFluxBroadcast } = require('../utils/fluxBroadcastHelper');
 const { peerManager } = require('../utils/peerState');
 const fluxCommunicationUtils = require('../fluxCommunicationUtils');
@@ -41,197 +39,78 @@ async function getMissingHashes(options = {}) {
   });
 }
 
-function createJsonArrayExtractor(onObject) {
-  let buffer = '';
-  let scanPos = 0;
-  let inDataArray = false;
-  let depth = 0;
-  let inString = false;
-  let escaped = false;
-  let objStart = -1;
+// Requests a node keeps open to one peer at once, so the peer reads the next
+// while this node stores the last.
+const BATCH_REQUESTS_PER_PEER = 2;
 
-  return {
-    write(chunk) {
-      buffer += chunk;
-      while (scanPos < buffer.length) {
-        const ch = buffer[scanPos];
-        if (!inDataArray) {
-          const idx = buffer.indexOf('"data":[', scanPos);
-          if (idx === -1) {
-            const keep = Math.max(0, buffer.length - 20);
-            buffer = buffer.slice(keep);
-            scanPos = 0;
-            return;
-          }
-          scanPos = idx + 8;
-          inDataArray = true;
-          continue;
-        }
-        if (escaped) { escaped = false; scanPos += 1; continue; }
-        if (ch === '\\' && inString) { escaped = true; scanPos += 1; continue; }
-        if (ch === '"') { inString = !inString; scanPos += 1; continue; }
-        if (inString) { scanPos += 1; continue; }
-        if (ch === '{') {
-          if (depth === 0) objStart = scanPos;
-          depth += 1;
-        } else if (ch === '}') {
-          depth -= 1;
-          if (depth === 0 && objStart !== -1) {
-            try { onObject(JSON.parse(buffer.slice(objStart, scanPos + 1))); } catch (e) { /* skip malformed */ }
-            objStart = -1;
-          }
-        } else if (ch === ']' && depth === 0) {
-          buffer = '';
-          scanPos = 0;
-          return;
-        }
-        scanPos += 1;
-      }
-      if (objStart !== -1) {
-        buffer = buffer.slice(objStart);
-        scanPos -= objStart;
-        objStart = 0;
-      } else {
-        buffer = '';
-        scanPos = 0;
-      }
-    },
+/**
+ * Asks every peer that answers message batches for the contents of these hashes,
+ * MAX_REQUEST_HASHES at a time, BATCH_REQUESTS_PER_PEER requests open to each
+ * peer at once. Hashes a request leaves unheld - the peer holds them not, or its
+ * connection closed - are asked of a peer not yet asked for them. A peer asked
+ * for every hash still unheld, or gone, is asked nothing more.
+ * @param {string[]} hashes
+ * @returns {Promise<{peers: number, requests: number, stored: number, unheld: number}>}
+ */
+async function syncByBatches(hashes) {
+  const peers = [...peerManager.allValues()].filter((peer) => peer.remoteCapabilities?.has(messageBatchRequests.CAPABILITY));
+  if (peers.length === 0 || hashes.length === 0) return { peers: peers.length, requests: 0, stored: 0, unheld: hashes.length };
+  const started = Date.now();
+  const queue = [];
+  for (let offset = 0; offset < hashes.length; offset += messageBatchRequests.MAX_REQUEST_HASHES) {
+    queue.push({ hashes: hashes.slice(offset, offset + messageBatchRequests.MAX_REQUEST_HASHES), asked: new Set() });
+  }
+  let requests = 0;
+  let stored = 0;
+  let inFlight = 0;
+  let wake;
+  let changed = new Promise((resolve) => { wake = resolve; });
+  const notify = () => {
+    const woken = wake;
+    changed = new Promise((resolve) => { wake = resolve; });
+    woken();
   };
-}
 
-const BULK_FETCH_BATCH_SIZE = 500;
-
-/**
- * Streams a peer's permanent messages and stores the ones this node is missing.
- * @param {string} peerIp
- * @param {string|number} peerPort
- * @param {Map<string, {txid: string, height: number, value: number}>} missing this node's own
- *   payment record of each hash it is missing, keyed by hash
- * @param {Function} [onProgress]
- */
-async function bulkFetchStreamAndProcess(peerIp, peerPort, missing, onProgress) {
-  log.info(`syncMissingHashes - Checking explorer sync on ${peerIp}:${peerPort}`);
-  const syncResponse = await serviceHelper.axiosGet(
-    `http://${peerIp}:${peerPort}/explorer/issynced`,
-    { timeout: 5000 },
-  ).catch((error) => { log.error(error); return null; });
-  if (!syncResponse || !syncResponse.data || syncResponse.data.status !== 'success' || !syncResponse.data.data) {
-    return { processed: 0, skipped: 0, streamed: 0 };
-  }
-
-  log.info(`syncMissingHashes - Streaming permanent messages from ${peerIp}:${peerPort} (${missing.size} missing)`);
-  const response = await serviceHelper.axiosGet(
-    `http://${peerIp}:${peerPort}/apps/permanentmessages`,
-    { responseType: 'stream', timeout: 120_000, headers: { 'Accept-Encoding': 'gzip' }, decompress: false },
-  ).catch((error) => { log.error(error); return null; });
-  if (!response || !response.data) {
-    return { processed: 0, skipped: 0, streamed: 0 };
-  }
-
-  const isGzip = response.headers?.['content-encoding'] === 'gzip';
-  let dataStream = response.data;
-  if (isGzip) {
-    dataStream = response.data.pipe(zlib.createGunzip());
-  }
-
-  let totalSeen = 0;
-  let totalProcessed = 0;
-  let totalSkipped = 0;
-  const batch = [];
-  let streamDone = false;
-  let stopped = false;
-  let signalBatch;
-  let waitForBatch = new Promise((r) => { signalBatch = r; });
-
-  const extractor = createJsonArrayExtractor((obj) => {
-    totalSeen += 1;
-    if (obj.hash && missing.has(obj.hash)) {
-      batch.push(obj);
-      if (batch.length >= BULK_FETCH_BATCH_SIZE) {
-        dataStream.pause();
-        signalBatch();
+  async function askFrom(key) {
+    for (;;) {
+      const socket = peerManager.get(key);
+      if (!socket) return;
+      const index = queue.findIndex((chunk) => !chunk.asked.has(key));
+      if (index === -1) {
+        if (inFlight === 0) return;
+        // eslint-disable-next-line no-await-in-loop
+        await changed;
+        continue;
+      }
+      const [chunk] = queue.splice(index, 1);
+      chunk.asked.add(key);
+      inFlight += 1;
+      try {
+        const { message, done } = messageBatchRequests.openRequest(key, chunk.hashes);
+        // eslint-disable-next-line no-await-in-loop
+        const signed = await serialiseAndSignFluxBroadcast(message);
+        if (signed) socket.send(signed);
+        requests += 1;
+        // eslint-disable-next-line no-await-in-loop
+        const outcome = await done;
+        stored += outcome.stored;
+        if (outcome.missing.length) queue.push({ hashes: outcome.missing, asked: chunk.asked });
+      } finally {
+        inFlight -= 1;
+        notify();
       }
     }
-  });
-
-  const decoder = new StringDecoder('utf8');
-  dataStream.on('data', (chunk) => extractor.write(decoder.write(chunk)));
-  dataStream.on('end', () => { streamDone = true; signalBatch(); });
-  dataStream.on('close', () => { streamDone = true; signalBatch(); });
-  dataStream.on('error', (err) => {
-    if (!stopped) log.error(`syncMissingHashes - stream error from ${peerIp}:${peerPort}: ${err.message}`);
-    streamDone = true;
-    signalBatch();
-  });
-
-  try {
-    while (!streamDone || batch.length >= BULK_FETCH_BATCH_SIZE) {
-      // eslint-disable-next-line no-await-in-loop
-      await waitForBatch;
-      if (batch.length === 0) break;
-
-      const currentBatch = batch.splice(0, BULK_FETCH_BATCH_SIZE);
-      // eslint-disable-next-line no-await-in-loop
-      const stats = await processMessages(currentBatch, onProgress);
-      totalProcessed += stats.processed;
-      totalSkipped += stats.skipped;
-      for (const msg of currentBatch) missing.delete(msg.hash);
-
-      if (missing.size === 0) {
-        log.info(`syncMissingHashes - All missing hashes resolved after streaming ${totalSeen} messages`);
-        stopped = true;
-        break;
-      }
-
-      waitForBatch = new Promise((r) => { signalBatch = r; });
-      dataStream.resume();
-    }
-
-    if (batch.length > 0) {
-      const stats = await processMessages(batch, onProgress);
-      totalProcessed += stats.processed;
-      totalSkipped += stats.skipped;
-      for (const msg of batch) missing.delete(msg.hash);
-    }
-  } finally {
-    dataStream.destroy();
-    response.data.destroy();
   }
 
-  log.info(`syncMissingHashes - Streamed ${totalSeen} messages from ${peerIp}:${peerPort}: ${totalProcessed} processed, ${totalSkipped} skipped`);
-  fluxEventBus.publish('hashSync:bulkFetched', {
-    peer: `${peerIp}:${peerPort}`, streamed: totalSeen, processed: totalProcessed, skipped: totalSkipped,
+  await Promise.all(peers.flatMap((peer) => Array.from({ length: BATCH_REQUESTS_PER_PEER }, () => askFrom(peer.key))));
+  const unheld = queue.reduce((total, chunk) => total + chunk.hashes.length, 0);
+  log.info(`syncMissingHashes - ${stored} of ${hashes.length} stored from ${peers.length} peers in ${requests} batch requests, ${unheld} unheld, in ${Date.now() - started} ms`);
+  fluxEventBus.publish('hashSync:batchFetched', {
+    peers: peers.length, requests, requested: hashes.length, stored, unheld, ms: Date.now() - started,
   });
-  return { processed: totalProcessed, skipped: totalSkipped, streamed: totalSeen };
-}
-
-/**
- * Stores what a peer sent, through the one store: a message is stored only with
- * this node's payment record for it, so one this node has not seen paid is
- * skipped. The decider judges what is stored.
- *
- * @param {object[]} messages
- * @param {(progress: {processed: number, skipped: number, total: number}) => void} [onProgress]
- * @returns {Promise<{processed: number, skipped: number, total: number}>}
- */
-async function processMessages(messages, onProgress) {
-  let processed = 0;
-  let skipped = 0;
-  let failed = 0;
-
-  const CHUNK_SIZE = 2000;
-  for (let offset = 0; offset < messages.length; offset += CHUNK_SIZE) {
-    const chunk = messages.slice(offset, offset + CHUNK_SIZE);
-    // eslint-disable-next-line no-await-in-loop
-    const storage = await confirmedMessageStore.storeConfirmedMessages(chunk);
-    processed += storage.stored.length;
-    skipped += storage.alreadyStored.length + storage.unpaid.length;
-    failed += storage.refused.length;
-
-    log.info(`syncMissingHashes - ${processed} processed, ${skipped} skipped, ${failed} failed of ${messages.length}`);
-    if (onProgress) onProgress({ processed, skipped, total: messages.length });
-  }
-  return { processed, skipped, total: messages.length };
+  return {
+    peers: peers.length, requests, stored, unheld,
+  };
 }
 
 /**
@@ -378,7 +257,7 @@ async function ephemeralHashRound(hashes, force, currentHeight) {
 }
 
 async function syncMissingHashes(options = {}) {
-  const { maxConcurrentPeers = 3, onProgress = null, force = false, currentHeight = 0 } = options;
+  const { onProgress = null, force = false, currentHeight = 0 } = options;
 
   if (syncRunning) {
     log.info('syncMissingHashes - Already running, skipping');
@@ -400,25 +279,13 @@ async function syncMissingHashes(options = {}) {
     const initialCount = missingHashes.length;
     let resolved = localResolved;
 
-    // Bulk fetch for large gaps (> 500 exceeds single fluxapprequest v2 cap)
-    if (missingHashes.length > 500) {
-      const peers = pickRandomPeers(peerManager, maxConcurrentPeers);
-      const peerKeys = peers.map((p) => p.key).join(', ');
-      log.info(`syncMissingHashes - ${missingHashes.length} missing, using streaming bulk fetch from ${peers.length} peers: ${peerKeys}`);
-
-      // A hash paid more than once is placed by its first payment, as the scan records it first.
-      const missing = new Map();
-      for (const record of missingHashes) {
-        if (!missing.has(record.hash)) missing.set(record.hash, record);
-      }
-      for (const peer of peers) {
-        if (missing.size === 0) break;
-        // eslint-disable-next-line no-await-in-loop
-        const stats = await bulkFetchStreamAndProcess(peer.ip, peer.port, missing, onProgress);
-        resolved += stats.processed;
-      }
-
+    // In batches from every peer that answers them; what they do not hold is
+    // asked for below, a message per hash.
+    const batches = await syncByBatches([...new Set(missingHashes.map((record) => record.hash))]);
+    if (batches.requests > 0) {
+      resolved += batches.stored;
       missingHashes = await getMissingHashes({ force, currentHeight });
+      if (onProgress) onProgress({ resolved, missing: missingHashes.length });
     }
 
     // Targeted fetch via fluxapprequest v2 (capped at 500 per request)

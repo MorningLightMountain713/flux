@@ -20,6 +20,7 @@ const appEventVerifier = require('./appMessaging/appEventVerifier');
 const appsRepository = require('./appDatabase/appsRepository');
 const manifestStanding = require('./appLifecycle/manifestStanding');
 const policyStore = require('./policyStore');
+const { MAX_FRAME_BYTES, MAX_REQUEST_HASHES } = require('./appMessaging/messageBatchRequests');
 
 const myMessageCache = cacheManager.tempMessageCache;
 
@@ -45,6 +46,48 @@ async function sendSignedMessage(message, peer, options = {}) {
 }
 
 /**
+ * Answer a fluxapprequest v3: the contents this node holds of the hashes named,
+ * in fluxappmessagesync frames of at most MAX_FRAME_BYTES of messages, each
+ * signed once and sent when the last has drained, the last marked done. A hash
+ * this node does not hold is left out.
+ * @param {{hashes: string[], requestId: string}} message
+ * @param {import('./utils/FluxPeerSocket').FluxPeerSocket} peer
+ * @returns {Promise<void>}
+ */
+async function respondWithMessageBatch(message, peer) {
+  const { hashes, requestId } = message;
+  if (typeof requestId !== 'string' || requestId.length === 0 || requestId.length > 64
+    || !Array.isArray(hashes) || hashes.length > MAX_REQUEST_HASHES || hashes.some((hash) => typeof hash !== 'string')) {
+    throw new Error('Invalid Flux App Request v3 message');
+  }
+  const records = await appRecords.messages().byHashes([...new Set(hashes)]);
+  let batch = [];
+  let bytes = 0;
+  let sent = 0;
+  const send = async (done) => {
+    await sendSignedMessage({
+      type: 'fluxappmessagesync', version: 1, requestId, messages: batch, done,
+    }, peer, { awaitDrain: true });
+    sent += batch.length;
+    batch = [];
+    bytes = 0;
+  };
+  for (const record of records) {
+    if (!record.isHeld) continue;
+    const contents = { ...record.contents, hash: record.hash };
+    const size = Buffer.byteLength(JSON.stringify(contents), 'utf8');
+    if (batch.length && bytes + size > MAX_FRAME_BYTES) {
+      // eslint-disable-next-line no-await-in-loop
+      await send(false);
+    }
+    batch.push(contents);
+    bytes += size;
+  }
+  await send(true);
+  fluxEventBus.publish('hashRequest:responded', { peer: peer.key, requested: hashes.length, found: sent });
+}
+
+/**
  * To respond with app message.
  * @param {object} msgObj Message object with data.type and hashes.
  * @param {import('./utils/FluxPeerSocket').FluxPeerSocket} peer Peer that requested the message.
@@ -59,6 +102,11 @@ async function respondWithAppMessage(msgObj, peer) {
     }
 
     const message = msgObj.data;
+
+    if (message.version === 3) {
+      await respondWithMessageBatch(message, peer);
+      return;
+    }
 
     if (message.version !== 1 && message.version !== 2) {
       throw new Error(`Invalid Flux App Request message, version ${message.version} not supported`);

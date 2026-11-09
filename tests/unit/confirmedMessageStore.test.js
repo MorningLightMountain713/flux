@@ -16,6 +16,7 @@ describe('confirmedMessageStore', () => {
   let blockTimes;
   let attestationValid;
   let storedMeanwhile;
+  let writes;
   let store;
 
   beforeEach(() => {
@@ -26,6 +27,7 @@ describe('confirmedMessageStore', () => {
     blockTimes = [];
     attestationValid = true;
     storedMeanwhile = false;
+    writes = 0;
     store = proxyquire('../../ZelBack/src/services/appMessaging/confirmedMessageStore', {
       config: asConfig({}),
       '../../lib/log': { warn: sinon.stub(), info: sinon.stub(), error: sinon.stub() },
@@ -37,12 +39,20 @@ describe('confirmedMessageStore', () => {
             .filter((hash) => records.has(hash) && records.get(hash).notOnChain !== true)
             .map((hash) => [hash, records.get(hash)])),
           byHashes: async (hashes) => hashes.filter((hash) => storedHashes.has(hash)).map((hash) => ({ hash, isHeld: true })),
-          storeContents: async (contents) => {
+          storeContentsMany: async (list) => {
+            writes += 1;
             if (insertError) throw insertError;
-            if (storedMeanwhile || storedHashes.has(contents.hash)) return { stored: false };
-            inserted.push(contents);
-            storedHashes.add(contents.hash);
-            return { stored: true };
+            const written = { stored: [], alreadyStored: [] };
+            for (const contents of list) {
+              if (storedMeanwhile || storedHashes.has(contents.hash)) {
+                written.alreadyStored.push(contents.hash);
+              } else {
+                inserted.push(contents);
+                storedHashes.add(contents.hash);
+                written.stored.push(contents.hash);
+              }
+            }
+            return written;
           },
           setBlockTime: async (hash, blockTime) => { blockTimes.push([hash, blockTime]); },
         }),
@@ -190,6 +200,25 @@ describe('confirmedMessageStore', () => {
     await store.storeConfirmedMessages([fresh, held, unpaid]);
     expect(heard).to.have.length(1);
     expect(heard[0]).to.have.members([fresh.hash, held.hash]);
+  });
+
+  it('writes the contents of every message that passes its checks in one call, in the order given', async () => {
+    const first = await domain.paidTempMessage({ version: 1 });
+    const second = await domain.paidTempMessage({ version: 1, timestamp: 1_760_000_000_001 });
+    const unpaid = await domain.paidTempMessage({ version: 1, timestamp: 1_760_000_000_002 });
+    pay(first);
+    pay(second);
+    const result = await store.storeConfirmedMessages([first, unpaid, second]);
+    expect(writes).to.equal(1);
+    expect(inserted.map((contents) => contents.hash)).to.deep.equal([first.hash, second.hash]);
+    expect(result.stored.map(({ hash }) => hash)).to.deep.equal([first.hash, second.hash]);
+    expect(result.unpaid).to.deep.equal([unpaid.hash]);
+  });
+
+  it('writes nothing when no message passes its checks', async () => {
+    const unpaid = await domain.paidTempMessage({ version: 1 });
+    await store.storeConfirmedMessages([unpaid]);
+    expect(writes).to.equal(0);
   });
 
   it('tells its listeners nothing when it resolved nothing', async () => {

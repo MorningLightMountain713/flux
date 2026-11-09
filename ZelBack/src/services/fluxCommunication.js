@@ -35,6 +35,7 @@ const contentSlotService = require('./appLifecycle/contentSlotService');
 const contentManifestSyncService = require('./appMessaging/contentManifestSyncService');
 const fluxEventBus = require('./utils/fluxEventBus');
 const { appSyncEvents, EVENTS: SYNC_EVENTS } = require('./utils/appSyncEvents');
+const messageBatchRequests = require('./appMessaging/messageBatchRequests');
 const { INTENT } = require('./utils/messageIntent');
 const {
   NONE, ROUTE, register, declaredIntent, handlerFor, isOrdered, noteSkipped, unmetNeed,
@@ -1358,12 +1359,13 @@ async function dispatchSyncResponse(msgObj, peerSocket) {
   try {
     const peerKey = peerSocket.key;
     // The reconcile response types ride their own request/response and are gated
-    // by the reconcile service's active round (checked in their handlers), not by
-    // the requester's isSyncResponseWanted the boot-sync types are gated by.
+    // by the reconcile service's active round, and a message batch by the request
+    // it answers (each checked in its handler), not by the requester's
+    // isSyncResponseWanted the boot-sync types are gated by.
     const type = msgObj.data?.type;
-    const isReconcile = type === 'fluxappcontentmanifestindex' || type === 'fluxappcontentmanifestsync'
-      || type === 'fluxappingressindex' || type === 'fluxappingresssync';
-    if (!isReconcile && !peerManager.isSyncResponseWanted(peerSocket, msgObj.data?.requestTimestamp)) {
+    const gatedByItsHandler = type === 'fluxappcontentmanifestindex' || type === 'fluxappcontentmanifestsync'
+      || type === 'fluxappingressindex' || type === 'fluxappingresssync' || type === 'fluxappmessagesync';
+    if (!gatedByItsHandler && !peerManager.isSyncResponseWanted(peerSocket, msgObj.data?.requestTimestamp)) {
       // No request to this connection is open, so nobody asked for it. Said, because
       // the drop is otherwise silent.
       log.warn(`Unsolicited ${type} from ${peerSocket.direction} peer ${peerKey}`);
@@ -1523,6 +1525,7 @@ register('fluxpolicy', (msg, peer) => policyStore.offerBundle(
 ), ROUTE.GOSSIP, INTENT.ANSWER, IN_PROCESS);
 
 // Answers to a sync this node asked for, which is why they are ordered.
+register('fluxappmessagesync', (msg, peer) => messageBatchRequests.receiveFrame(msg.data, peer.key), ROUTE.ORDERED, INTENT.ANSWER, STORED);
 register('fluxapptempsync', handleTempSyncResponse, ROUTE.ORDERED, INTENT.ANSWER, STORED);
 register('fluxapprunningsync', handleAppRunningSyncResponse, ROUTE.ORDERED, INTENT.ANSWER, STORED);
 register('fluxappinstallingsync', handleAppInstallingSyncResponse, ROUTE.ORDERED, INTENT.ANSWER, STORED);

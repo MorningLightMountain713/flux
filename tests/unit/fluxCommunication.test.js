@@ -31,6 +31,7 @@ const { peerManager } = require('../../ZelBack/src/services/utils/peerState');
 const { networkHealthMonitor } = require('../../ZelBack/src/services/utils/NetworkHealthMonitor');
 const nodeDownService = require('../../ZelBack/src/services/nodeDownService');
 const { appSyncEvents, EVENTS: SYNC_EVENTS } = require('../../ZelBack/src/services/utils/appSyncEvents');
+const messageBatchRequests = require('../../ZelBack/src/services/appMessaging/messageBatchRequests');
 const { PEER_SOURCE, CLOSE_CODES } = require('../../ZelBack/src/services/utils/FluxPeerSocket');
 const rateLimit = require('../../ZelBack/src/services/utils/rateLimit');
 const fluxEventBus = require('../../ZelBack/src/services/utils/fluxEventBus');
@@ -4056,5 +4057,41 @@ describe('the state-sync request throttle', () => {
     await settle();
 
     expect(respond.callCount, 'the refusal kept the request, or the answer did not').to.equal(2);
+  });
+});
+
+describe('a message batch reaches the request it answers', () => {
+  const socket = { key: '198.51.100.21:16127', connectionId: 1 };
+
+  beforeEach(() => {
+    capabilities.setForTests(['localDbPrepared'], true);
+    sinon.stub(fluxCommunicationUtils, 'verifyFluxBroadcast')
+      .resolves({ result: fluxCommunicationUtils.VerifyResult.OK, announcer: null });
+    // No boot sync is open to this connection: the batch is gated by its own request.
+    sinon.stub(peerManager, 'isSyncResponseWanted').returns(false);
+  });
+
+  afterEach(() => {
+    capabilities.resetForTests();
+    sinon.restore();
+  });
+
+  it('hands a fluxappmessagesync frame to the batch requests, whatever the boot sync wants', async () => {
+    const receive = sinon.stub(messageBatchRequests, 'receiveFrame').resolves();
+    const data = {
+      type: 'fluxappmessagesync', version: 1, requestId: 'request-1', messages: [], done: true,
+    };
+
+    await peerManager.syncResponseDispatcher({ data }, socket);
+
+    sinon.assert.calledOnceWithExactly(receive, data, socket.key);
+  });
+
+  it('still drops a boot-sync answer nobody asked for', async () => {
+    const receive = sinon.stub(messageBatchRequests, 'receiveFrame').resolves();
+
+    await peerManager.syncResponseDispatcher({ data: { type: 'fluxapptempsync', messages: [], done: true } }, socket);
+
+    sinon.assert.notCalled(receive);
   });
 });

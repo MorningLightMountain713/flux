@@ -445,7 +445,7 @@ export function nodeClient(nodeNum) {
         'ephemeralSync:budgetSpent',
         'sync:chunkVerified',
         'hashSync:complete',
-        'hashSync:bulkFetched',
+        'hashSync:batchFetched',
         'hashSync:failed',
         'hashRequest:received',
         'hashRequest:responded',
