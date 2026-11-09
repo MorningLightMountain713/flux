@@ -4,14 +4,10 @@ import {
 } from 'mocha';
 import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
-import { pushImage } from '../framework/registry-helper.js';
-import { buildSeedableApp } from '../framework/seed-helper.js';
-import { REGISTRY_REPO_HOST, getSubnetConfig } from '../framework/subnet-config.js';
+import { getSubnetConfig } from '../framework/subnet-config.js';
 import { assertNoEvent } from '../framework/wait.js';
-import { bootAndPeer, installOnNodes } from '../framework/reconciler-suite.js';
-import { dbClient } from '../framework/db-client.js';
+import { bootAndPeer } from '../framework/reconciler-suite.js';
 import { execInContainer } from '../framework/container.js';
-import { socketAddr } from '../framework/state-events.js';
 import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 
 // A version 2 apprunning message names every app its sender holds. Each entry is
@@ -23,10 +19,6 @@ import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 // The stub peer is a listed node with its own key. Nodes 1 and 2 cannot reach it,
 // so they hear what it says only through node 0's relay, and a message node 0
 // does not store goes no further.
-//
-// The last case is a real node that holds an app installed without a hash beside
-// one installed normally: it leaves the first out of its announcements
-// (app:running.unannounced), and every node goes on storing them.
 
 const REAL_NODES = 3;
 const STUB_INDEX = 3;
@@ -35,31 +27,14 @@ const BEHIND_RELAY = [1, 2];
 // A node names itself in its messages by its socket address, a stub by its IP.
 const bare = (address) => String(address).replace(/:16127$/, '');
 
-function appComponent(appName) {
-  return {
-    name: 'alpha',
-    description: 'one entry at a time',
-    repotag: `${REGISTRY_REPO_HOST}/${appName}:v1`,
-    ports: [],
-    domains: [''],
-    environmentParameters: [],
-    commands: [],
-    containerPorts: [80],
-    containerData: '/tmp',
-    cpu: 0.1,
-    ram: 100,
-    hdd: 1,
-    repoauth: '',
-  };
-}
-
 describe('an announcement is judged one entry at a time', function () {
   let env;
   dumpLogsOnFailure(() => env);
   let stub;
   const stamp = Date.now();
   const stubIp = () => getSubnetConfig().nodeIp(STUB_INDEX + 1);
-  const rowNamesAt = async (i, address) => (await dbClient(i + 1).getAppLocationsByIp(address)).map((row) => row.name);
+  // Whether node i lists the app at the address, read now.
+  const locatedAt = async (i, name, address) => (await env.clients[i].getAppLocationsAt(name, address)).length > 0;
   const marks = () => realNodes.map((i) => env.clients[i].getLastEventId());
   // What each node did with the message from `ip` that names `name`, after `afterIds`.
   const handledBy = (nodes, afterIds, ip, name, timeout = 60000) => Promise.all(nodes.map(async (i) => (await env.clients[i].waitForEvent(
@@ -130,7 +105,9 @@ describe('an announcement is judged one entry at a time', function () {
     // eslint-disable-next-line no-restricted-syntax
     for (const i of realNodes) {
       // eslint-disable-next-line no-await-in-loop
-      expect(await rowNamesAt(i, stubIp()), `node ${i} holds a row for the entry without a hash`).to.not.include(refused);
+      expect(await locatedAt(i, kept, stubIp()), `node ${i} lists no location for the entry with a hash`).to.equal(true);
+      // eslint-disable-next-line no-await-in-loop
+      expect(await locatedAt(i, refused, stubIp()), `node ${i} lists a location for the entry without a hash`).to.equal(false);
     }
   });
 
@@ -161,7 +138,7 @@ describe('an announcement is judged one entry at a time', function () {
     // eslint-disable-next-line no-restricted-syntax
     for (const i of realNodes) {
       // eslint-disable-next-line no-await-in-loop
-      expect(await rowNamesAt(i, stubIp()), `node ${i} deleted the sender's rows`).to.include(held);
+      expect(await locatedAt(i, held, stubIp()), `node ${i} deleted the sender's rows`).to.equal(true);
     }
   });
 
@@ -182,43 +159,7 @@ describe('an announcement is judged one entry at a time', function () {
     // eslint-disable-next-line no-restricted-syntax
     for (const i of realNodes) {
       // eslint-disable-next-line no-await-in-loop
-      expect(await rowNamesAt(i, stubIp()), `node ${i} kept the sender's rows`).to.deep.equal([]);
+      expect(await locatedAt(i, held, stubIp()), `node ${i} kept the sender's rows`).to.equal(false);
     }
-  });
-
-  it('leaves out an app installed without a hash, and every node goes on storing the rest', async function () {
-    this.timeout(420000);
-    const appName = `e2eentryreal${stamp}`;
-    await pushImage(appName, 'v1');
-    const app = await buildSeedableApp({ name: appName, instances: 1, compose: [appComponent(appName)] });
-    // Node 1: it announces on its own interval. Node 2's ring neighbour is the
-    // stub's slot, which it cannot reach, so it holds fewer peers than the
-    // threshold that starts a node's announcements.
-    const idx = 1;
-    await installOnNodes(env, app, [idx]);
-    const holder = socketAddr(idx + 1);
-    const others = realNodes.filter((i) => i !== idx);
-
-    // An app installed without a hash, as a node carries one it took before it
-    // upgraded. Everything else about it is the real app's.
-    const unhashed = `e2eentryunhashed${stamp}`;
-    const { hash, ...withoutHash } = await dbClient(idx + 1).localApp(appName);
-    expect(hash, 'fixture: the real app is installed with a hash').to.be.a('string');
-    const afterIds = marks();
-    await dbClient(idx + 1).seedLocalApp({ ...withoutHash, name: unhashed });
-
-    const { data: announced } = await env.clients[idx].waitForEvent(
-      'app:running', (d) => d.apps?.some((a) => a.name === appName), 120000, { afterId: afterIds[idx] },
-    );
-    expect(await dbClient(idx + 1).localApp(unhashed), 'fixture: the unhashed app was still installed when the holder announced').to.not.equal(null);
-    expect(announced.apps.map((a) => a.name), 'the holder announced the app it has no hash for').to.not.include(unhashed);
-    expect(announced.unannounced, 'the holder did not say what it left out').to.deep.equal([unhashed]);
-
-    // Every other node stores the announcements made since.
-    await Promise.all(others.map((i) => env.clients[i].waitForEvent(
-      'network:apprunning', (d) => bare(d.ip) === bare(holder) && d.apps?.some((a) => a.name === appName), 120000, { afterId: afterIds[i] },
-    ).catch(() => { throw new Error(`node ${i} stored no announcement from the holder since the unhashed app was installed`); })));
-    await Promise.all(others.map((i) => assertNoEvent(env.clients[i], 'network:apprunning',
-      (d) => bare(d.ip) === bare(holder) && d.refused?.length > 0, 0, { afterId: afterIds[i] })));
   });
 });

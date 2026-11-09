@@ -1,0 +1,75 @@
+[
+  {
+    "name": "bad-entries-located",
+    "breaks": "a location is made only of an entry with a string name and a string hash",
+    "edits": [
+      {
+        "file": "ZelBack/src/services/appDatabase/appsRepository.js",
+        "from": "    { $match: { '_v2Filtered.apps.name': { $type: 'string' }, '_v2Filtered.apps.hash': { $type: 'string' } } },\n",
+        "to": ""
+      }
+    ],
+    "red": [
+      "stores and relays the entries with a name and hash, and refuses the one without"
+    ]
+  },
+  {
+    "name": "refused-unnamed",
+    "breaks": "a node names the entries of a message it refused",
+    "edits": [
+      {
+        "file": "ZelBack/src/services/appMessaging/messageStore.js",
+        "from": "  const refused = judged.refused.map((app) => app?.name ?? null);",
+        "to": "  const refused = [];"
+      }
+    ],
+    "red": [
+      "stores and relays the entries with a name and hash, and refuses the one without",
+      "stores and relays nothing of a message whose every entry is refused, and keeps the sender's rows"
+    ]
+  },
+  {
+    "name": "every-refused-stored",
+    "breaks": "a message whose every entry is refused is stored nowhere and relayed nowhere",
+    "edits": [
+      {
+        "file": "ZelBack/src/services/appMessaging/messageStore.js",
+        "from": "    if (namesOnlyRefusedApps(data)) return outcome(false);\n",
+        "to": ""
+      }
+    ],
+    "red": [
+      "stores and relays nothing of a message whose every entry is refused, and keeps the sender's rows"
+    ]
+  },
+  {
+    "name": "cleared-never",
+    "breaks": "a node says it cleared the sender's rows",
+    "edits": [
+      {
+        "file": "ZelBack/src/services/appMessaging/messageStore.js",
+        "from": "    cleared: isNewer && data.version === 2 && Array.isArray(data.apps) && data.apps.length === 0,",
+        "to": "    cleared: false,"
+      }
+    ],
+    "red": [
+      "deletes the sender's rows on a message that names no apps"
+    ]
+  },
+  {
+    "name": "relayed-never",
+    "breaks": "a node relays an announcement that is news to it",
+    "edits": [
+      {
+        "file": "ZelBack/src/services/fluxCommunication.js",
+        "from": "    const relayed = Boolean(isNewer && timestampOK);",
+        "to": "    const relayed = false;"
+      }
+    ],
+    "red": [
+      "stores and relays the entries with a name and hash, and refuses the one without",
+      "stores and relays nothing of a message whose every entry is refused, and keeps the sender's rows",
+      "deletes the sender's rows on a message that names no apps"
+    ]
+  }
+]
