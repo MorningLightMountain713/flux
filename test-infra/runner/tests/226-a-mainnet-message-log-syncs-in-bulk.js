@@ -10,8 +10,9 @@
  * re-registered by their owner and by another, hashes paid twice in one block, expiries that
  * cross the PON fork, and apps in force and expired at the scanned height.
  *
- * The peers serve the messages; the joiner holds the payment records, as its own scan of the
- * chain would have left them, and one message, stored at a block its payment is not in. It must
+ * The chain carries each payment at its mainnet height, in the daemon's address index, and every
+ * node starts with nothing scanned, so it records the payments from that index as a fresh node
+ * does. The peers are handed the messages; the joiner takes them from its peers in batches. It must
  * keep every message, each at its own record's txid, height and payment, and hold every app whose
  * newest message is still in its term, at that message's height.
  *
@@ -28,20 +29,70 @@ import { fileURLToPath } from 'node:url';
 import { gunzipSync } from 'node:zlib';
 import { createTestEnv } from '../framework/test-env.js';
 import { bootAndPeer } from '../framework/reconciler-suite.js';
+import { handAppMessage } from '../framework/app-delivery.js';
 import { waitForDaemonReady, waitForOrchestratorState, waitFor } from '../framework/wait.js';
 import { setSystemSecure, stopTicker } from '../framework/daemon-control.js';
 import { getSubnetConfig } from '../framework/subnet-config.js';
 import { dbClient } from '../framework/db-client.js';
 import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
-import { Chain, expiresAtHeightFor } from '@runonflux/flux-spec';
+import { Chain, appPaymentAddress, expiresAtHeightFor } from '@runonflux/flux-spec';
 
 const FIXTURE = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'fixtures', 'mainnet-message-slice');
 const JOINER = 3;
+const PEERS = [0, 1, 2];
+// messages handed to each peer at once
+const HAND_CONCURRENCY = 20;
 
 const readLines = (file) => gunzipSync(readFileSync(join(FIXTURE, file))).toString().trim().split('\n').map((line) => JSON.parse(line));
 
 // The height a v1-v8 app's term ends at on the harness chain, as flux-spec reads it.
 const expirationHeight = (height, expire) => expiresAtHeightFor({ height, expire, chain: Chain.HARNESS });
+
+// The hash as a payment's last output carries it: OP_RETURN and the hash's ASCII text in hex.
+const opReturn = (hash) => `OP_RETURN ${Buffer.from(hash, 'ascii').toString('hex')}`;
+
+/**
+ * The daemon's address index for the slice's payments: each record's transaction, paying the
+ * address in force at its height and carrying the hash. Within a block the payments take their
+ * positions in their messages' timestamp order.
+ */
+function addressIndexOf(records, messageOf) {
+  const ordered = [...records].sort((a, b) => a.height - b.height
+    || messageOf.get(a.hash).timestamp - messageOf.get(b.hash).timestamp);
+  const nextAtHeight = new Map();
+  const deltas = [];
+  const transactions = [];
+  for (const record of ordered) {
+    const blockindex = nextAtHeight.get(record.height) ?? 0;
+    nextAtHeight.set(record.height, blockindex + 1);
+    const address = appPaymentAddress(Chain.HARNESS, record.height);
+    deltas.push({
+      satoshis: record.value, txid: record.txid, index: 0, blockindex, height: record.height, address,
+    });
+    transactions.push({
+      txid: record.txid,
+      version: 1,
+      locktime: 0,
+      height: record.height,
+      vin: [],
+      vout: [
+        { value: record.value / 1e8, valueSat: record.value, n: 0, scriptPubKey: { addresses: [address] } },
+        { value: 0, valueSat: 0, n: 1, scriptPubKey: { asm: opReturn(record.hash) } },
+      ],
+    });
+  }
+  return { deltas, transactions };
+}
+
+// The message as its owner signed it: what a node is handed.
+function signed(message) {
+  const {
+    type, version, appSpecifications, hash, timestamp, signature,
+  } = message;
+  return {
+    type, version, appSpecifications, hash, timestamp, signature,
+  };
+}
 
 describe('a node that joins takes a slice of the mainnet message log in bulk', function () {
   let env;
@@ -66,35 +117,40 @@ describe('a node that joins takes a slice of the mainnet message log in bulk', f
       newest.set(name, placed);
     }
   }
-  // The message the joiner holds before it joins: the newest of an app in its term, stored a block
-  // above its payment, as a record written from a block that later left the chain placed it.
-  const [strayName, strayPlaced] = [...newest]
-    .find(([, m]) => expirationHeight(m.height, m.expire) > manifest.scannedHeight + 1000);
-  const strayMessage = messages.find((m) => m.hash === strayPlaced.hash);
+  const messageOf = new Map(messages.map((message) => [message.hash, message]));
   let fetched;
 
   before(async function () {
     this.timeout(1200000);
-    // The chain starts above every message in the slice, so the joiner's scan has passed them all.
+    // The chain starts above every payment in the slice, and carries each in its address index.
     env = await createTestEnv({
-      hookCtx: this, nodes: 4, deferredNodes: 1, initialHeight: manifest.scannedHeight + 1,
+      hookCtx: this,
+      nodes: 4,
+      deferredNodes: 1,
+      initialHeight: manifest.scannedHeight + 1,
+      unscanned: true,
+      addressIndex: addressIndexOf(records, messageOf),
     });
     await bootAndPeer(env);
     await stopTicker();
 
-    await Promise.all(env.clients.map(async (client, i) => {
-      if (!client) return;
-      await dbClient(i + 1).seedPermanentMessages(messages);
-      await dbClient(i + 1).seedAppHashes(records.map((record) => ({ ...record, message: true, messageNotFound: false })));
+    // Each peer decides each message by its own rules; the joiner is what this suite judges.
+    const queue = messages.map(signed);
+    await Promise.all(PEERS.map(async (peer) => {
+      const next = [...queue];
+      await Promise.all(Array.from({ length: HAND_CONCURRENCY }, async () => {
+        while (next.length) {
+          // eslint-disable-next-line no-await-in-loop
+          await handAppMessage(env, next.shift(), [peer], { timeout: 300000, anyDecision: true });
+        }
+      }));
     }));
-    await dbClient(JOINER + 1).seedAppHashes(records.map((record) => ({ ...record, message: false, messageNotFound: false })));
-    await dbClient(JOINER + 1).seedPermanentMessage({ ...strayMessage, height: strayPlaced.height + 1 });
     await setSystemSecure(getSubnetConfig().nodeIp(JOINER + 1), false);
 
     const joiner = await env.startNode(JOINER);
     await waitForDaemonReady(joiner);
     await env.startDiscovery([JOINER]);
-    fetched = await joiner.waitForEvent('hashSync:bulkFetched', (d) => d.processed > 0, 600000);
+    fetched = await joiner.waitForEvent('hashSync:batchFetched', (d) => d.stored > 0, 600000);
     await waitForOrchestratorState(joiner, 'READY', 600000);
   });
 
@@ -106,21 +162,20 @@ describe('a node that joins takes a slice of the mainnet message log in bulk', f
   it('covers every message type and spec version', function () {
     expect(new Set(messages.map((m) => m.type))).to.have.all.keys('zelappregister', 'zelappupdate', 'fluxappregister', 'fluxappupdate');
     expect([...new Set(messages.map((m) => m.appSpecifications.version))].sort()).to.deep.equal([1, 2, 3, 4, 5, 6, 7, 8]);
-    expect(messages.length, 'enough messages for the bulk path').to.be.above(500);
   });
 
-  it('takes the slice in bulk from a peer, but for the message it held', function () {
-    expect(fetched.data.processed, JSON.stringify(fetched.data)).to.equal(messages.length - 1);
+  it('takes the slice in batches from its peers, every message of it', function () {
+    expect(fetched.data, JSON.stringify(fetched.data)).to.include({ stored: messages.length, unheld: 0 });
   });
 
   it('keeps every message, each at its own record\'s txid, height and payment', async function () {
-    const kept = new Map((await dbClient(JOINER + 1).permanentMessages()).map((m) => [m.hash, m]));
+    const kept = new Map((await dbClient(JOINER + 1).appMessages({ held: true })).map((m) => [m.hash, m]));
     const missing = messages.filter((m) => !kept.has(m.hash)).map((m) => `${m.hash} ${m.type} v${m.appSpecifications.version} ${m.appSpecifications.name}`);
     expect(missing, `${missing.length} of ${messages.length} messages not kept`).to.deep.equal([]);
     const misplaced = messages.filter((message) => {
       const stored = kept.get(message.hash);
       const record = recordOf.get(message.hash);
-      return stored.txid !== record.txid || stored.height !== record.height || stored.valueSat !== record.value
+      return stored.txid !== record.txid || stored.height !== record.height || stored.value !== record.value
         || stored.signature !== message.signature || stored.timestamp !== message.timestamp;
     }).map((m) => m.hash);
     expect(misplaced, `${misplaced.length} messages not at their own record`).to.deep.equal([]);
@@ -131,8 +186,6 @@ describe('a node that joins takes a slice of the mainnet message log in bulk', f
     const db = dbClient(JOINER + 1);
     const scanned = await db.explorerHeight();
     const expected = new Map([...newest].filter(([, m]) => expirationHeight(m.height, m.expire) > scanned));
-    // the app of the message the joiner held is one of them
-    expect(expected.has(strayName)).to.equal(true);
 
     let held = new Map();
     await waitFor(async () => {

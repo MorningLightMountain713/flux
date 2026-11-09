@@ -35,11 +35,12 @@ async function hand(client, message, name, timeout) {
 }
 
 /**
- * Waits for a node to decide a message it holds. The registry row of an
- * applied message is written before its decision is, so an applied answer
- * means the node lists the app.
+ * Waits for a node to decide a message it holds, and returns the decision. The
+ * registry row of an applied message is written before its decision is, so an
+ * applied answer means the node lists the app. With `anyDecision` false, any
+ * other decision fails the call with the node's reason.
  */
-async function applied(client, message, name, timeout) {
+async function decided(client, message, name, timeout, anyDecision) {
   let verdict = null;
   await waitFor(async () => {
     const { status, data } = await client.request('GET', `/v2/apps/messages/${message.hash}/decision`);
@@ -47,9 +48,10 @@ async function applied(client, message, name, timeout) {
     verdict = data.data;
     return true;
   }, { timeout, interval: 1000, label: `node ${client.num} decides the message of ${name}` });
-  if (verdict.decision !== 'applied') {
+  if (!anyDecision && verdict.decision !== 'applied') {
     throw new Error(`node ${client.num} decided the message of ${name} ${verdict.decision}${verdict.reason ? `: ${verdict.reason}` : ''}`);
   }
+  return verdict;
 }
 
 /**
@@ -60,14 +62,16 @@ async function applied(client, message, name, timeout) {
  * @param {object} env - the test environment
  * @param {object} message - the message as signed
  * @param {number[]} indices - the nodes to hand it to; an index with no node is passed over
- * @param {{timeout?: number}} [options] - how long each node is given
+ * @param {{timeout?: number, anyDecision?: boolean}} [options] - how long each node is
+ *   given, and whether a decision other than applied is accepted
+ * @returns {Promise<object[]>} each node's decision, in the order of `indices`
  */
-export async function handAppMessage(env, message, indices, { timeout = 120000 } = {}) {
+export async function handAppMessage(env, message, indices, { timeout = 120000, anyDecision = false } = {}) {
   const clients = indices.map((i) => env.clients[i]).filter(Boolean);
   const { name } = message.appSpecifications;
-  await Promise.all(clients.map(async (client) => {
+  return Promise.all(clients.map(async (client) => {
     await hand(client, message, name, timeout);
-    await applied(client, message, name, timeout);
+    return decided(client, message, name, timeout, anyDecision);
   }));
 }
 

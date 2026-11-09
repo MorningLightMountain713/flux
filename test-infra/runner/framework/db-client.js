@@ -768,6 +768,14 @@ export function dbClient(nodeNum) {
       await explorerDb.collection('zelappshashes').insertMany(records);
     },
 
+    // The app message records this node holds, matching a query: each the payment
+    // half (txid, height, txIndex, value) and the contents half (type, timestamp,
+    // signature, appSpecifications) it has.
+    async appMessages(query = {}) {
+      const col = await this.messages();
+      return col.find(query, { projection: { _id: 0 } }).toArray();
+    },
+
     async permanentMessages(query = {}) {
       const globalDb = await db('appsGlobal');
       return globalDb.collection('zelappsmessages').find(query, { projection: { _id: 0 } }).toArray();
