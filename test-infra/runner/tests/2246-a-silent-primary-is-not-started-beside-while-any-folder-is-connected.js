@@ -62,6 +62,7 @@ describe('a silent primary is not started beside while any of its folders is con
 
     await pushTestApp(appName, 'v1', 'gsilent', { user: APP_UID });
     const app = await buildSeedableApp({
+      pinnedTo: [PRIMARY, STANDBY],
       name: appName, instances: HOLDERS.length, compose: COMPONENTS.map((name) => gComponent(appName, name)),
     });
     await installOnNodes(env, app, [PRIMARY]);

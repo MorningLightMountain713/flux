@@ -62,6 +62,7 @@ describe('a second machine on the collateral of a node running an app', function
     await bootAndPeer(env, { minOutbound: 1, minInbound: 1 });
     await pushImage(appName, 'v1');
     const app = await buildSeedableApp({
+      pinnedTo: [LISTED],
       name: appName,
       instances: 1,
       compose: [{

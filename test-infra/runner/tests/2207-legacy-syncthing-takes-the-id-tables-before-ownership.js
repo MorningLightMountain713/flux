@@ -98,6 +98,7 @@ describe('a legacy node\'s syncthing takes the numeric id tables before any owne
 
     await pushTestApp(appName, 'v1', 'ownlegacy', { user: '4101:4001' });
     const app = await buildSeedableApp({
+      pinnedTo: [LEGACY, ARCANE],
       name: appName,
       instances: 2,
       compose: [{

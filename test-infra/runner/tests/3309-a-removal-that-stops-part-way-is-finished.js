@@ -71,8 +71,8 @@ describe('a removal that stops part way is finished', function () {
     holder = env.clients[HOLDER];
 
     await Promise.all([appName, otherName].map((name) => pushImage(name, 'v1')));
-    const app = await buildSeedableApp({ name: appName, compose: [component(appName)] });
-    const other = await buildSeedableApp({ name: otherName, compose: [component(otherName)] });
+    const app = await buildSeedableApp({ pinnedTo: [HOLDER], name: appName, compose: [component(appName)] });
+    const other = await buildSeedableApp({ pinnedTo: [HOLDER], name: otherName, compose: [component(otherName)] });
     await installOnNodes(env, app, [HOLDER]);
     await installOnNodes(env, other, [HOLDER]);
     await waitFor(async () => Boolean(await getAppContainerId(holder.container, appName, appName))
@@ -150,7 +150,7 @@ describe('an app whose removal is pending takes no install', function () {
     holder = env.clients[HOLDER];
 
     await pushImage(appName, 'v1');
-    const app = await buildSeedableApp({ name: appName, compose: [component(appName)] });
+    const app = await buildSeedableApp({ pinnedTo: [HOLDER], name: appName, compose: [component(appName)] });
     await installOnNodes(env, app, [HOLDER]);
     await waitFor(async () => Boolean(await getAppContainerId(holder.container, appName, appName)), {
       timeout: 120000, interval: 2000, label: 'the app runs before the redeploys',

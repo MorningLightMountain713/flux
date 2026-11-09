@@ -89,6 +89,7 @@ describe('an owner stop and start keeps every g: component on the primary', func
 
     await pushTestApp(appName, 'v1', 'gowner', { user: APP_UID });
     const app = await buildSeedableApp({
+      pinnedTo: [FIRST, ...HOLDERS.filter((h) => h !== FIRST)],
       name: appName, instances: HOLDERS.length, compose: COMPONENTS.map((name) => gComponent(appName, name)),
     });
 

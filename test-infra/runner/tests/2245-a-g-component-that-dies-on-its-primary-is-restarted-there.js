@@ -78,6 +78,7 @@ describe('a g: component that dies on its primary is restarted there', function 
 
     await pushTestApp(appName, 'v1', 'gdies', { user: APP_UID });
     const app = await buildSeedableApp({
+      pinnedTo: [PRIMARY, STANDBY],
       name: appName, instances: HOLDERS.length, compose: COMPONENTS.map((name) => gComponent(appName, name)),
     });
     await installOnNodes(env, app, [PRIMARY]);

@@ -121,6 +121,7 @@ describe('a surplus trim waits for a peer that is leaving', function () {
 
     await pushTestApp(appName, 'v1', 'swtrim', { user: APP_UID });
     const app = await buildSeedableApp({
+      pinnedTo: [PRIMARY, SURPLUS],
       name: appName,
       instances: 1,
       compose: [{

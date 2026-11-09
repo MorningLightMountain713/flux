@@ -98,6 +98,7 @@ describe('a surplus trim keeps the copy running any g: component', function () {
 
     await pushTestApp(appName, 'v1', 'gsurplus', { user: APP_UID });
     const app = await buildSeedableApp({
+      pinnedTo: [OLDER, NEWEST],
       name: appName, instances: HOLDERS.length, compose: COMPONENTS.map((name) => gComponent(appName, name)),
     });
     await installOnNodes(env, app, [OLDER]);

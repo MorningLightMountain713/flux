@@ -56,10 +56,11 @@ describe('a legacy node under pm2 drains within its kill timeout', function () {
     return `/mnt/appdata/flux-apps/${folder}/appdata/${FINAL_SAVE}`;
   };
 
-  const buildApp = async (name) => {
+  const buildApp = async (name, pinnedTo) => {
     await pushTestApp(name, 'v1', name, { user: APP_UID });
     return buildSeedableApp({
       name,
+      pinnedTo,
       instances: 2,
       compose: [{
         name,
@@ -105,7 +106,7 @@ describe('a legacy node under pm2 drains within its kill timeout', function () {
     for (const primary of [TIMED, DEFAULT]) {
       const name = apps[primary];
       // eslint-disable-next-line no-await-in-loop
-      const app = await buildApp(name);
+      const app = await buildApp(name, [primary, STANDBY]);
       // eslint-disable-next-line no-await-in-loop
       await installOnNodes(env, app, [primary]);
       // eslint-disable-next-line no-await-in-loop

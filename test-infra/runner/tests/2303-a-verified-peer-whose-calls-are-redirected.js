@@ -84,7 +84,7 @@ describe('a verified peer whose calls are redirected between the question and th
 
     await resetFdm();
     await pushImage(appName, 'v1');
-    const app = await buildSeedableSyncthingApp({ name: appName, syncMode: 'activeStandby' });
+    const app = await buildSeedableSyncthingApp({ pinnedTo: [B, A], name: appName, syncMode: 'activeStandby' });
 
     await electMaster(appName, env.clients[B].ip);
     const primaryAfter = env.clients[B].getLastEventId();

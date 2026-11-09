@@ -53,6 +53,7 @@ describe('a redeploy whose record write fails keeps the app', function () {
 
     await pushImage(appName, 'v1');
     app = await buildSeedableApp({
+      pinnedTo: [HOLDER],
       name: appName,
       instances: 1,
       compose: [{

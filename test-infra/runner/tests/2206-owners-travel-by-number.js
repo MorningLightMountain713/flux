@@ -152,6 +152,7 @@ describe('owners travel by number on real syncthing', function () {
 
     await pushTestApp(appName, 'v1', 'ownnum', { user: `${APP_UID}:${APP_GID}` });
     const app = await buildSeedableApp({
+      pinnedTo: [PRIMARY, ARCANE, UNPRIVILEGED],
       name: appName,
       instances: HOLDERS.length,
       compose: [{

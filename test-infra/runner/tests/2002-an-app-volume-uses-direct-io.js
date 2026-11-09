@@ -61,6 +61,7 @@ describe('an app volume uses direct I/O', function () {
 
     await pushImage(appName, 'v1');
     app = await buildSeedableApp({
+      pinnedTo: [0],
       name: appName,
       instances: 1,
       compose: [{

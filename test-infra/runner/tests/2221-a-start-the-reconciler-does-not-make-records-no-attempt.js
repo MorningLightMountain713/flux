@@ -52,7 +52,7 @@ describe('a start the reconciler does not make records no attempt', function () 
     await resetFdm();
     await resetSyncState();
     await pushImage(appName, 'v1');
-    const app = await buildSeedableSyncthingApp({ name: appName, syncMode: 'activeStandby' });
+    const app = await buildSeedableSyncthingApp({ pinnedTo: [0, 1], name: appName, syncMode: 'activeStandby' });
     identifier = componentIdentifier(app);
     folder = folderIdOf(app);
 

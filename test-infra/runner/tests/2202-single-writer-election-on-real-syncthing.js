@@ -95,6 +95,7 @@ describe('single-writer election on real syncthing', function () {
 
     await pushTestApp(appName, 'v1', 'swelect', { user: APP_UID });
     app = await buildSeedableApp({
+      pinnedTo: [FIRST, SECOND, LATE],
       name: appName,
       instances: HOLDERS.length,
       compose: [{
