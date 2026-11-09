@@ -91,7 +91,6 @@ describe('single-writer copies on real syncthing', function () {
 
     await pushTestApp(appName, 'v1', 'swcopy', { user: APP_UID });
     const app = await buildSeedableApp({
-      env,
       name: appName,
       instances: HOLDERS.length,
       compose: [{

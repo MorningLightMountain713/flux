@@ -89,7 +89,7 @@ describe('an owner stop and start keeps every g: component on the primary', func
 
     await pushTestApp(appName, 'v1', 'gowner', { user: APP_UID });
     const app = await buildSeedableApp({
-      env, name: appName, instances: HOLDERS.length, compose: COMPONENTS.map((name) => gComponent(appName, name)),
+      name: appName, instances: HOLDERS.length, compose: COMPONENTS.map((name) => gComponent(appName, name)),
     });
 
     // One at a time: a node learns of the app only when it is installed, so the

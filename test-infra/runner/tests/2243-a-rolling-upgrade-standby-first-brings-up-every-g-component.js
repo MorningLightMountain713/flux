@@ -69,7 +69,6 @@ describe('a rolling upgrade, standby first, brings up every g: component', funct
 
     await pushTestApp(appName, 'v1', 'roll', { user: APP_UID });
     const app = await buildSeedableApp({
-      env,
       name: appName,
       instances: HOLDERS.length,
       compose: COMPONENTS.map((name) => gComponent(appName, name)),

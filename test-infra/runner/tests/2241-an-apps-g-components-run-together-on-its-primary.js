@@ -55,7 +55,6 @@ describe('an app\'s g: components run together on its primary', function () {
 
     await pushTestApp(appName, 'v1', 'twin', { user: APP_UID });
     const app = await buildSeedableApp({
-      env,
       name: appName,
       instances: HOLDERS.length,
       compose: COMPONENTS.map((name) => gComponent(appName, name)),

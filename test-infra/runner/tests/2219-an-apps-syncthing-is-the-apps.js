@@ -90,7 +90,6 @@ describe('an app\'s syncthing is the app\'s', function () {
 
     const image = await mirrorImage(SYNCTHING_IMAGE, null, { digest: SYNCTHING_IMAGE_DIGEST });
     const app = await buildSeedableApp({
-      env,
       name: syncthingApp,
       instances: 1,
       compose: [{
@@ -148,7 +147,6 @@ describe('an app\'s syncthing is the app\'s', function () {
 
     await pushTestApp(appName, 'v1', 'ownbeside', { user: '4101:4001' });
     const app = await buildSeedableApp({
-      env,
       name: appName,
       instances: 2,
       compose: [{

@@ -65,7 +65,6 @@ describe('a redeploy keeps the app on a node with room for its new specification
 
     await pushImage(appName, 'v1');
     app = await buildSeedableApp({
-      env,
       name: appName,
       instances: 1,
       compose: [{

@@ -224,7 +224,7 @@ describe('2503 app containers on a node with br_netfilter loaded', function suit
       hdd: 1,
       repoauth: '',
     });
-    const app = await buildSeedableApp({ name: appName, env, compose: [component('front'), component('back')] });
+    const app = await buildSeedableApp({ name: appName, compose: [component('front'), component('back')] });
     const mark = node.getLastEventId();
     // The node's own spawner installs it, as apps land in production: seeded to this node alone, it is the only one that can select it.
     await seedSpawnerApp(env, app, [NODE]);

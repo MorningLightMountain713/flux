@@ -64,7 +64,7 @@ describe('an update that adds a g: component runs the app on one node', function
 
     await pushTestApp(appName, 'v1', 'addg', { user: APP_UID });
     app = await buildSeedableApp({
-      env, name: appName, instances: HOLDERS.length, compose: [gComponent(appName, 'db')],
+      name: appName, instances: HOLDERS.length, compose: [gComponent(appName, 'db')],
     });
     await installOnNodes(env, app, [HOLDERS[0]]);
     await waitHolding(async () => (await oneHolderAtMost())[HOLDERS[0]].includes('db'), {

@@ -64,7 +64,6 @@ describe('a graceful shutdown drains to the standby and holds still', function (
 
     await pushTestApp(appName, 'v1', 'swdrain', { user: APP_UID });
     const app = await buildSeedableApp({
-      env,
       name: appName,
       instances: HOLDERS.length,
       compose: [{

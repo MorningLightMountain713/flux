@@ -59,7 +59,6 @@ describe('a legacy node under pm2 drains within its kill timeout', function () {
   const buildApp = async (name) => {
     await pushTestApp(name, 'v1', name, { user: APP_UID });
     return buildSeedableApp({
-      env,
       name,
       instances: 2,
       compose: [{

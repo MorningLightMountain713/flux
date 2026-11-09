@@ -94,7 +94,7 @@ describe('an update that moves the first g: component runs the app on one node',
 
     await pushTestApp(appName, 'v1', 'moveg', { user: APP_UID });
     app = await buildSeedableApp({
-      env, name: appName, instances: HOLDERS.length, compose: COMPONENTS.map((name) => gComponent(appName, name)),
+      name: appName, instances: HOLDERS.length, compose: COMPONENTS.map((name) => gComponent(appName, name)),
     });
     await installOnNodes(env, app, [HOLDERS[0]]);
     await waitHolding(async () => (await oneHolderAtMost())[HOLDERS[0]].length === COMPONENTS.length, {

@@ -68,7 +68,6 @@ describe('an app volume behind a symlinked apps folder', function () {
 
     await pushImage(appName, 'v1');
     const app = await buildSeedableApp({
-      env,
       name: appName,
       instances: 1,
       compose: [{

@@ -78,7 +78,7 @@ describe('a g: component that dies on its primary is restarted there', function 
 
     await pushTestApp(appName, 'v1', 'gdies', { user: APP_UID });
     const app = await buildSeedableApp({
-      env, name: appName, instances: HOLDERS.length, compose: COMPONENTS.map((name) => gComponent(appName, name)),
+      name: appName, instances: HOLDERS.length, compose: COMPONENTS.map((name) => gComponent(appName, name)),
     });
     await installOnNodes(env, app, [PRIMARY]);
     await waitHolding(async () => (await oneHolderAtMost())[PRIMARY].length === COMPONENTS.length, {
