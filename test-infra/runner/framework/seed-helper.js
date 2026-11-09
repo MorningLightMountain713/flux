@@ -50,6 +50,15 @@ function sha256(data) {
   return createHash('sha256').update(data).digest('hex');
 }
 
+// When a builder signs a message: the harness clock, and never the same
+// millisecond twice, since an owner's messages for one app never share a
+// timestamp and a node refuses the second as a replay.
+let lastSigningTime = 0;
+function signingTime() {
+  lastSigningTime = Math.max(harnessNow(), lastSigningTime + 1);
+  return lastSigningTime;
+}
+
 // Every option this builder reads. An option outside this set is a fixture
 // describing an app it did not build, so it is refused here rather than dropped.
 const SEEDABLE_APP_OPTIONS = new Set([
@@ -149,7 +158,7 @@ export async function buildSeedableApp(opts) {
 
   const type = 'fluxappregister';
   const version = 1;
-  const timestamp = harnessNow();
+  const timestamp = signingTime();
   const payload = type + version + JSON.stringify(spec) + timestamp;
   const signature = await signBtcMessage(payload, ownerKey.privkey);
 
@@ -252,7 +261,7 @@ export async function buildSeedableUpdate(app, mutate, { signer = appOwnerKey() 
 
   const type = 'fluxappupdate';
   const version = 1;
-  const timestamp = harnessNow();
+  const timestamp = signingTime();
   const payload = type + version + JSON.stringify(spec) + timestamp;
   const signature = await signBtcMessage(payload, ownerKey.privkey);
 
@@ -328,7 +337,7 @@ export async function buildSeedableLegacyApp({
 
   const type = 'fluxappregister';
   const messageVersion = 1;
-  const timestamp = harnessNow();
+  const timestamp = signingTime();
   const payload = type + messageVersion + JSON.stringify(spec) + timestamp;
   const signature = await signBtcMessage(payload, ownerKey.privkey);
 
