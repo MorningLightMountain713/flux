@@ -1799,8 +1799,8 @@ async function reindexExplorerApi(req, res) {
     res.json(messageHelper.errUnauthorizedMessage());
     return;
   }
-  const { reindexapps } = req?.params || {};
-  if (serviceHelper.ensureBoolean(reindexapps ?? req?.query?.rescanapps ?? false)) {
+  const reindexapps = req?.params?.reindexapps ?? req?.query?.reindexapps ?? req?.query?.rescanapps;
+  if (serviceHelper.ensureBoolean(reindexapps ?? false)) {
     refuseAppsFlag(res);
     return;
   }

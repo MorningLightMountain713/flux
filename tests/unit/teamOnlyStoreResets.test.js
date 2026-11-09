@@ -72,11 +72,15 @@ describe('the explorer reset\'s apps flag', () => {
 
   [
     { name: 'explorer reindex', handler: () => explorerService.reindexExplorerApi, params: { reindexapps: 'true' } },
+    { name: 'explorer reindex, flag in the query', handler: () => explorerService.reindexExplorerApi, query: { reindexapps: 'true' } },
+    { name: 'explorer reindex, flag in the query by the rescan\'s name', handler: () => explorerService.reindexExplorerApi, query: { rescanapps: 'true' } },
     { name: 'explorer rescan', handler: () => explorerService.rescanExplorerApi, params: { blockheight: '100', rescanapps: 'true' } },
-  ].forEach(({ name, handler, params }) => {
+  ].forEach(({
+    name, handler, params = {}, query = {},
+  }) => {
     it(`${name} refuses the apps flag with a 400 saying the registry needs no rebuild, and touches nothing`, async () => {
       const res = response();
-      await handler()({ params, headers: { zelidauth: 'team' } }, res);
+      await handler()({ params, query, headers: { zelidauth: 'team' } }, res);
 
       expect(res.status.calledOnceWithExactly(400)).to.equal(true);
       expect(res.json.firstCall.args[0].data.message).to.include('needs no rebuild');
