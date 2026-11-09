@@ -6,8 +6,8 @@ import { getSubnetConfig } from '../framework/subnet-config.js';
 import { pushTestApp } from '../framework/registry-helper.js';
 import { buildSeedableSyncthingApp, buildSeedableTestApp } from '../framework/seed-helper.js';
 import {
-  bootAndPeer, installedInstanceIndices, installingClaimIpsByNode, seedSpawnerApp,
-  waitForInstanceCount, waitForLocationTable,
+  bootAndPeer, holdSpawnerExcept, installedInstanceIndices, installingClaimIpsByNode,
+  releaseSpawnerHolds, seedSpawnerApp, waitForInstanceCount, waitForLocationTable,
 } from '../framework/reconciler-suite.js';
 import { waitFor } from '../framework/wait.js';
 import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
@@ -20,9 +20,10 @@ import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 // indices 0, 2 and 4 in one, 1, 3 and 5 in the other. Two instances over two domains
 // is a share of one per domain.
 //
-// Placement is ordered by seeding, never by racing: the spec reaches one node at a
-// time, and a node the spec has not reached cannot select the app. So the copy each
-// step expects can only land where the step says.
+// Placement is ordered by holding, never by racing: every node holds the app, and a
+// node whose spawner is held at its attempt on the app cannot place it until released.
+// A released node judges the app afresh, its share included. So the copy each step
+// expects can only land where the step says.
 
 const DOMAINS = 2;
 const DOMAIN_SHARE_WINDOW_MS = 60000;
@@ -74,11 +75,12 @@ async function buildApp(prefix) {
   return { appName, app };
 }
 
-// The first copy, placed on FIRST alone, and known to STEPS_ASIDE before the spec
-// reaches it: the share is counted from STEPS_ASIDE's own location view, so a copy it
-// has not heard of does not count against its domain.
+// The first copy, placed on FIRST alone, and known to STEPS_ASIDE before its spawner
+// is released: the share is counted from STEPS_ASIDE's own location view, so a copy
+// it has not heard of does not count against its domain. Every other node stays held.
 async function placeFirstCopy(env, app, appName) {
-  await seedSpawnerApp(env, app, [FIRST]);
+  await holdSpawnerExcept(env, appName, [FIRST]);
+  await seedSpawnerApp(env, app);
   await waitFor(
     async () => (await installedInstanceIndices(env, appName)).includes(FIRST),
     { timeout: 150000, interval: 3000, label: `${appName} installed on node index ${FIRST}` },
@@ -135,7 +137,7 @@ describe('the domain share steps aside, then places', function () {
       await placeFirstCopy(env, app, appName);
 
       const anchor = env.clients[STEPS_ASIDE].getLastEventId();
-      await seedSpawnerApp(env, app, [1, 2, 3, 4, 5]);
+      await releaseSpawnerHolds(env, appName, [1, 2, 3, 4, 5]);
       await waitForShareDeferral(env, appName, anchor);
       await waitForShareDeferralToMature(env, appName, anchor);
 
@@ -174,10 +176,10 @@ describe('the domain share steps aside, then places', function () {
       await placeFirstCopy(env, app, appName);
 
       const anchor = env.clients[STEPS_ASIDE].getLastEventId();
-      await seedSpawnerApp(env, app, [STEPS_ASIDE]);
+      await releaseSpawnerHolds(env, appName, [STEPS_ASIDE]);
       await waitForShareDeferral(env, appName, anchor);
 
-      await seedSpawnerApp(env, app, [OTHER_DOMAIN]);
+      await releaseSpawnerHolds(env, appName, [OTHER_DOMAIN]);
       await waitFor(
         async () => (await installedInstanceIndices(env, appName)).includes(OTHER_DOMAIN),
         { timeout: 150000, interval: 3000, label: `${appName} installed on node index ${OTHER_DOMAIN}` },

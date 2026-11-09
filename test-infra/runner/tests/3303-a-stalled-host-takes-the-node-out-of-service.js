@@ -90,11 +90,14 @@ function step(what) {
   console.log(`# 3303 ${new Date().toISOString()} ${what}`);
 }
 
-// An app that writes a log line every 200 ms, installed on one of `indices` only.
+// An app that writes a log line every 200 ms, pinned to `indices` and installed on
+// one of them by its own spawner.
 async function installOn(env, name, indices) {
   await pushTestApp(name);
-  const app = await buildSeedableTestApp({ name, logEveryMs: 200, instances: 1 });
-  await seedSpawnerApp(env, app, indices);
+  const app = await buildSeedableTestApp({
+    name, logEveryMs: 200, instances: 1, pinnedTo: indices,
+  });
+  await seedSpawnerApp(env, app);
   return Promise.any(indices.map(async (i) => {
     await waitForAppInstalled(env.clients[i], name, 120000);
     return i;

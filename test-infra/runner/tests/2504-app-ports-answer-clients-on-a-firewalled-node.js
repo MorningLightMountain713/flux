@@ -97,6 +97,7 @@ describe('2504 app ports answer every client on a firewalled node', function sui
     appName = `e2ev6app${Date.now()}`;
     const app = await buildSeedableApp({
       name: appName,
+      pinnedTo: [NODE],
       compose: [{
         name: appName,
         description: 'listens on its published port',
@@ -115,8 +116,8 @@ describe('2504 app ports answer every client on a firewalled node', function sui
     });
     [appPort] = app.spec.compose[0].ports;
     const mark = node.getLastEventId();
-    // The node's own spawner installs it, as apps land in production: seeded to this node alone, it is the only one that can select it.
-    await seedSpawnerApp(env, app, [NODE]);
+    // The node's own spawner installs it, as apps land in production: pinned to this node, it is the only one that can select it.
+    await seedSpawnerApp(env, app);
     await waitForAppInstalled(node, appName, 240000, { afterId: mark });
   });
 

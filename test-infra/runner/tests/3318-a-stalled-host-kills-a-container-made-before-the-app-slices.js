@@ -5,7 +5,9 @@ import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
 import { execInContainer } from '../framework/container.js';
 import { waitForUp, waitForAppInstalled } from '../framework/wait.js';
-import { bootAndPeer, seedSpawnerApp } from '../framework/reconciler-suite.js';
+import {
+  bootAndPeer, holdSpawnerExcept, releaseSpawnerHolds, seedGlobalSpec,
+} from '../framework/reconciler-suite.js';
 import { buildSeedableTestApp } from '../framework/seed-helper.js';
 import { pushTestApp } from '../framework/registry-helper.js';
 import {
@@ -34,6 +36,8 @@ const REMOVAL_DEADLINE_MS = 45 * 1000;
 const KILL_SLACK_MS = 10 * 1000;
 const STALL_MS = READ_INTERVAL_MS * STUCK_INTERVALS;
 const UPGRADED = 0;
+// the nodes on this tree's build, which take a handed message
+const CURRENT = [1, 2];
 
 const outOfServiceForTheStall = (data) => data.dosState >= 100 && String(data.dosMessage).includes('Host stall');
 const containerOf = (appName) => `flux${appName}_${appName}`;
@@ -82,8 +86,12 @@ describe('a stalled host kills a container made before the app slices', function
     // an app that writes a log line every 200 ms, so docker writes while its disk stalls
     await pushTestApp(appName);
     const app = await buildSeedableTestApp({ name: appName, logEveryMs: 200, instances: 1 });
-    await seedSpawnerApp(env, app, [UPGRADED]);
+    // The release takes no handed message: the current nodes are handed it with their
+    // spawners held, so the upgraded node learns it from them and its own spawner places it.
+    await holdSpawnerExcept(env, appName, [UPGRADED]);
+    await seedGlobalSpec(env, app, CURRENT);
     await waitForAppInstalled(client, appName, 180000);
+    await releaseSpawnerHolds(env, appName, CURRENT);
     await waitForUp(client, appName, 'the app is up on the release');
     scope = await containerCgroup(container, containerOf(appName));
 

@@ -555,11 +555,13 @@ describe('2502 app containers are kept off private networks and off each other\'
         hdd: 1,
         repoauth: '',
       });
-      const app = await buildSeedableApp({ name: appName, compose: [component('front'), component('back')] });
+      const app = await buildSeedableApp({
+        name: appName, pinnedTo: [NODE], compose: [component('front'), component('back')],
+      });
       appPorts = app.spec.compose.map((c) => c.ports[0]);
       const mark = node.getLastEventId();
-      // The node's own spawner installs it, as apps land in production: seeded to this node alone, it is the only one that can select it.
-      await seedSpawnerApp(env, app, [NODE]);
+      // The node's own spawner installs it, as apps land in production: pinned to this node, it is the only one that can select it.
+      await seedSpawnerApp(env, app);
       await waitForAppInstalled(node, appName, 240000, { afterId: mark });
       appBridge = await bridgeOf(`fluxDockerNetwork_${appName}`);
     });

@@ -74,8 +74,10 @@ describe('a node whose router refuses it is out of service until it stops', func
   const gateway = () => upnpGatewayState(nodeIp);
   const testMappings = (requests, sinceMs = 0) => requests.filter((r) => r.action === 'AddPortMapping'
     && r.description === 'Flux_Test_App' && Date.parse(r.at) >= sinceMs);
+  // Pinned to NODE: no other node's spawner selects the app, so it lands on NODE alone.
   const buildApp = (name) => buildSeedableApp({
     name,
+    pinnedTo: [NODE],
     compose: [{
       name,
       description: 'holds a port on the router',
@@ -151,7 +153,7 @@ describe('a node whose router refuses it is out of service until it stops', func
     const app = await buildApp(appName);
     [appPort] = app.spec.compose[0].ports;
     const mark = node.getLastEventId();
-    await seedSpawnerApp(env, app, [NODE]);
+    await seedSpawnerApp(env, app);
     await waitForAppInstalled(node, appName, 240000, { afterId: mark });
     expect((await gateway()).mappings.filter((m) => m.externalPort === appPort).map((m) => m.protocol).sort(), 'the app\'s port mapped').to.deep.equal(['TCP', 'UDP']);
 
@@ -201,7 +203,7 @@ describe('a node whose router refuses it is out of service until it stops', func
     const name = `e2eupnpfull${Date.now()}`;
     const app = await buildApp(name);
     const [port] = app.spec.compose[0].ports;
-    await seedSpawnerApp(env, app, [NODE]);
+    await seedSpawnerApp(env, app);
 
     await waitFor(async () => (await dosOf(node)).dosMessage === UPNP_DOS, {
       timeout: DOS_WITHIN_MS, interval: 2000, label: 'the node out of service for its full router',
@@ -232,7 +234,7 @@ describe('a node whose router refuses it is out of service until it stops', func
     const app = await buildApp(name);
     const [port] = app.spec.compose[0].ports;
     const mark = node.getLastEventId();
-    await seedSpawnerApp(env, app, [NODE]);
+    await seedSpawnerApp(env, app);
     await waitForAppInstalled(node, name, 240000, { afterId: mark });
     expect((await gateway()).mappings.some((m) => m.externalPort === port), 'the app\'s port mapped').to.equal(true);
 
@@ -270,7 +272,7 @@ describe('a node whose router refuses it is out of service until it stops', func
     const app = await buildApp(name);
     const [port] = app.spec.compose[0].ports;
     const mark = node.getLastEventId();
-    await seedSpawnerApp(env, app, [NODE]);
+    await seedSpawnerApp(env, app);
     await waitForAppInstalled(node, name, 240000, { afterId: mark });
     expect((await gateway()).mappings.some((m) => m.externalPort === port), 'the app\'s port mapped').to.equal(true);
 
