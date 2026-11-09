@@ -12,6 +12,7 @@ const specReconciler = require('../../ZelBack/src/services/appLifecycle/specReco
 const appGiveUp = require('../../ZelBack/src/services/appLifecycle/appGiveUp');
 const appOperations = require('../../ZelBack/src/services/appLifecycle/appOperations');
 const portManager = require('../../ZelBack/src/services/appNetwork/portManager');
+const fluxNetworkHelper = require('../../ZelBack/src/services/fluxNetworkHelper');
 const daemonServiceBlockchainRpcs = require('../../ZelBack/src/services/daemonService/daemonServiceBlockchainRpcs');
 const daemonStatus = require('../../ZelBack/src/services/daemonService/daemonStatus');
 const capabilities = require('../../ZelBack/src/services/utils/capabilities');
@@ -554,7 +555,7 @@ describe('explorerService tests', () => {
 
     beforeEach(async () => {
       findInDatabaseStub = sinon.stub(dbHelper, 'findOneInDatabase');
-      dropCollectionStub = sinon.stub(dbHelper, 'dropCollection');
+      dropCollectionStub = sinon.stub(dbHelper, 'dropCollection').resolves(true);
       sinon.stub(daemonStatus, 'daemonSyncState').returns({ synced: true });
       getBlockCountStub = sinon.stub(daemonServiceBlockchainRpcs, 'getBlockCount');
       sinon.stub(daemonServiceUtils, 'getConfigValue').returns('5HueCGU8rMjxEXxiPuD5BDku4MkFqeZyd4dZ1jvhTVqvbTLvyTJ'); // Valid WIF private key
@@ -650,8 +651,9 @@ describe('explorerService tests', () => {
       sinon.assert.notCalled(logErrorSpy);
       sinon.assert.calledWithMatch(logInfoSpy, 'Bootstrap: Using address-index fast path');
       sinon.assert.calledWithMatch(logInfoSpy, 'Bootstrap complete');
-      sinon.assert.calledWithMatch(logInfoSpy, 'Preparing apps collections');
+      sinon.assert.calledWithMatch(logInfoSpy, 'Preparing daemon collections');
       sinon.assert.calledWithMatch(logInfoSpy, 'Preparation done');
+      sinon.assert.calledOnce(messages.clearPayments);
     });
 
     it('should fall back to block-by-block scan when bootstrap fails', async () => {
@@ -780,32 +782,6 @@ describe('explorerService tests', () => {
       expect(explorerService.scanning()).to.equal(true);
       const deepRestoreBlocks = config.get('fluxapps.explorerDeepRestoreBlocks');
       sinon.assert.calledWithMatch(logInfoSpy, `Chain state - rewinding from 1000 to ${1000 - deepRestoreBlocks}: deep restore at start`);
-    });
-
-    it('should run the block processor, reindexOrRescanGlobalApps set to true, height == 0', async () => {
-      sinon.stub(dbHelper, 'removeDocumentsFromCollection').resolves(true);
-      sinon.stub(dbHelper, 'updateInDatabase').resolves(true);
-      sinon.stub(dbHelper, 'findInDatabase').resolves([]);
-      sinon.stub(dbHelper, 'countInDatabase').resolves(1);
-      findInDatabaseStub.returns({ generalScannedHeight: 0 });
-      dropCollectionStub.resolves(true);
-      const createIndexFake = sinon.fake.resolves(true);
-      const collectionFake = sinon.fake.returns({ createIndex: createIndexFake, updateMany: sinon.fake.resolves({ modifiedCount: 0 }), indexes: sinon.fake.resolves([]) });
-      const dbFake = sinon.fake.returns({ collection: collectionFake });
-      sinon.stub(dbHelper, 'databaseConnection').returns({ db: dbFake });
-      getBlockCountStub.returns({ value: 200_000 });
-      sinon.stub(daemonStatus, 'isInsightExplorer').returns(true);
-      sinon.stub(daemonServiceUtils, 'executeCall').resolves({ status: 'success', data: [] });
-      sinon.stub(daemonServiceUtils, 'executeBatchCall').resolves({ status: 'success', data: [] });
-
-      await explorerService.initiateBlockProcessor({ rescanGlobalApps: true });
-      await serviceHelper.delay(200);
-
-      sinon.assert.notCalled(logErrorSpy);
-      sinon.assert.calledWithMatch(logInfoSpy, 'Bootstrap: Using address-index fast path');
-      sinon.assert.calledWithMatch(logInfoSpy, 'Preparing apps collections');
-      sinon.assert.calledWithMatch(logInfoSpy, 'Preparation done');
-      sinon.assert.calledOnce(messages.clearPayments);
     });
   });
 
@@ -1819,6 +1795,8 @@ describe('explorerService tests', () => {
       sinon.stub(daemonStatus, 'daemonSyncState').returns({ synced: true, height: 1005 });
       sinon.stub(daemonStatus, 'isInsightExplorer').returns(false);
       sinon.stub(daemonSubscriptionService, 'isTopicAvailable').returns(true);
+      // A block at the chain's tip schedules the UPnP bench, which reads this node's address.
+      sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves('203.0.113.5:16127');
       sinon.stub(daemonServiceBlockchainRpcs, 'getBlock').callsFake(async ({ hashheight }) => {
         fetched.push(hashheight);
         if (onFetch) onFetch(hashheight);
