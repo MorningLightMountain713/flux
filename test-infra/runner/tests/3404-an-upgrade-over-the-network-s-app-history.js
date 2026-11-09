@@ -6,21 +6,23 @@
  *
  * The corpus (test-infra/app-corpus/fetch.mjs, named by E2E_APP_CORPUS) is
  * every permanent app message of a network, the app list a released node of it
- * serves, and the chain tip both were read at. The fleet's chain starts at that
+ * serves, and the chain tip both were read at. The suite runs on the one corpus
+ * its expected removals were written against, named by CORPUS_SHA256. The fleet's chain starts at that
  * tip. A node on the released image is given the corpus as that release keeps
  * it and boots on it, serving the list the network serves. It is then upgraded:
  * the first v9 start moves the messages, positions their payments, decides every
  * one and derives the list from the decisions.
  *
  * Then: the list it reaches is the release's at the same height, less exactly
- * the apps the rules refuse (README §8 of the boot-phases design: the apps
- * leaving at the upgrade, by name); every app it removes, adds or lists at
+ * the apps the rules refuse, by name; every app it removes, adds or lists at
  * another message is printed with the node's decision on each of its messages;
  * and the list is consistent within the boot bound, system.bootSyncTimeoutMs
  * from the start of FluxOS.
  */
 import { describe, it, before, after } from 'mocha';
 import { expect } from 'chai';
+import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { createTestEnv } from '../framework/test-env.js';
 import { authenticate } from '../auth.js';
@@ -44,11 +46,15 @@ const CORPUS = process.env.E2E_APP_CORPUS;
 const NODES = 4;
 const SUBJECT = 3; // boots on the release, then is upgraded
 const BOOT_BOUND_MS = production.system.bootSyncTimeoutMs;
+// The corpus EXPECTED_REMOVED was written against: mainnet at tip 3,111,136,
+// kept as /dat/e2e/app-corpus/mainnet-app-corpus-3111136.json.gz. A corpus
+// fetched again is a different network state and needs its own list and hash.
+const CORPUS_FILE = 'mainnet-app-corpus-3111136.json.gz';
+const CORPUS_SHA256 = '71cf21e4b679981671bae2a469c954a81935354f0969a415aeebd45917d5e6b9';
 // The apps the first derivation removes from the network's list: refused by the
-// rules the network's release does not enforce. claimcalc's registration paid
-// less than its price; tavpn was registered twice in two blocks, and v9 keeps
-// the first, so the second registrant's update is unauthorized.
-const EXPECTED_REMOVED = ['claimcalc', 'tavpn'];
+// rules the network's release does not enforce. claimcalc's last registration,
+// at 2,555,827, paid 0.6 FLUX, less than its price.
+const EXPECTED_REMOVED = ['claimcalc'];
 const UPGRADE_MS = 1200000;
 const RELEASE_LIST_MS = 900000;
 
@@ -82,7 +88,11 @@ describe('an upgrade over the network\'s app history', function () {
       throw new Error('FLUX_E2E_BASE_TAG names the node image of the released FluxOS the network runs: build it with FLUX_E2E_TAG=<base-tag> ./test-infra/build-release-image.sh <release tag>');
     }
     if (!CORPUS) {
-      throw new Error('E2E_APP_CORPUS names the corpus file: node test-infra/app-corpus/fetch.mjs <file>');
+      throw new Error(`E2E_APP_CORPUS names the corpus file, ${CORPUS_FILE}`);
+    }
+    const sha256 = createHash('sha256').update(readFileSync(CORPUS)).digest('hex');
+    if (sha256 !== CORPUS_SHA256) {
+      throw new Error(`E2E_APP_CORPUS is not the corpus EXPECTED_REMOVED was written against: ${CORPUS} has sha256 ${sha256}, the suite's is ${CORPUS_FILE} (${CORPUS_SHA256})`);
     }
     corpus = loadAppCorpus(CORPUS);
     env = await createTestEnv({
