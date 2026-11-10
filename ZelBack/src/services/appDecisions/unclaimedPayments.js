@@ -77,16 +77,16 @@ async function markVoided(hash, voided) {
 
 /**
  * Applies a void the scan just recorded: when it reaches the payment it
- * names, the hash is marked voided and its decision removed, and the decider
- * is woken for it. A void for a payment this node has no record of, or
- * outside the payment's window, changes nothing.
+ * names, the hash is marked voided and its name decided again. A void for a
+ * payment this node has no record of, or outside the payment's window,
+ * changes nothing.
  *
  * @param {object} message the parsed UnclaimedPaymentMessage
  * @param {number} height the void's height
- * @param {(hashes: string[]) => void} wake the decider's wake
+ * @param {(hashes: string[]) => Promise<unknown>} paymentsChanged the decider's paymentsChanged
  * @returns {Promise<boolean>} whether the hash was voided
  */
-async function applyVoid(message, height, wake) {
+async function applyVoid(message, height, paymentsChanged) {
   const { UnclaimedPaymentMessage: { voidsPayment } } = await getSpecPolicy();
   const record = await paymentRecord(message.hashHex);
   if (!record) return false;
@@ -95,25 +95,24 @@ async function applyVoid(message, height, wake) {
     return false;
   }
   await markVoided(message.hashHex, true);
-  await appRecords.decisions().undecide([message.hashHex]);
   log.info(`unclaimedPayments - ${message.hashHex} voided by the message at ${height}; its payment at ${record.height}`);
-  wake([message.hashHex]);
+  await paymentsChanged([message.hashHex]);
   return true;
 }
 
 /**
  * On a rewind to a height: every hash the dropped voids named is judged again
  * by the voids that remain, and a hash no remaining void reaches is unmarked
- * and undecided, so the decider decides its name anew. Runs after the rows
+ * and its name decided again. Runs after the rows
  * above the height are gone and before the history is rebuilt, so the live
  * history still holds the dropped voids: they are read before the first
  * await, since the rebuild that follows swaps the history.
  *
  * @param {number} height
- * @param {(hashes: string[]) => void} wake the decider's wake
+ * @param {(hashes: string[]) => Promise<unknown>} paymentsChanged the decider's paymentsChanged
  * @returns {Promise<string[]>} the hashes given back
  */
-async function onRewind(height, wake) {
+async function onRewind(height, paymentsChanged) {
   if (!history) return [];
   const entries = [...history.entries()];
   const dropped = entries.filter((entry) => entry.chainHeight >= height);
@@ -128,13 +127,11 @@ async function onRewind(height, wake) {
     if (stillVoided) continue;
     // eslint-disable-next-line no-await-in-loop
     await markVoided(hash, false);
-    // eslint-disable-next-line no-await-in-loop
-    await appRecords.decisions().undecide([hash]);
     given.push(hash);
   }
   if (given.length) {
     log.info(`unclaimedPayments - a rewind to ${height} gave back ${given.length} hash(es): ${given.join(', ')}`);
-    wake(given);
+    await paymentsChanged(given);
   }
   return given;
 }

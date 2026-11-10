@@ -194,6 +194,35 @@ describe('decider', function () {
     expect(await verdict('byBuyer')).to.equal('applied');
   });
 
+  it('decides a name again on the payment recorded in place of one the chain does not hold', async () => {
+    await store({ hash: 'r', height: 100 });
+    await store({ hash: 'u', type: 'fluxappupdate', height: 200 });
+    await store({ hash: 'other', name: 'Other', height: 100 });
+    const decider = loadDecider();
+    decider.wakeAll();
+    await decider.idle();
+    expect((await decisionOf('u')).height).to.equal(200);
+
+    await appRecords.messages().markNotOnChain('u');
+    const { replaced } = await appRecords.messages().recordPayments([{
+      hash: 'u', txid: 'tx-u-again', height: 300, txIndex: 0, value: 100,
+    }]);
+    expect(replaced).to.deep.equal(['u']);
+
+    expect(await decider.paymentsChanged(replaced)).to.deep.equal(['myapp']);
+    await decider.idle();
+
+    expect(await decisionOf('u')).to.include({ decision: 'applied', height: 300, txid: 'tx-u-again' });
+    expect(await verdict('r')).to.equal('applied');
+    expect(await verdict('other')).to.equal('applied');
+  });
+
+  it('changes nothing for hashes it holds no message or decision of', async () => {
+    const decider = loadDecider();
+    expect(await decider.paymentsChanged([])).to.deep.equal([]);
+    expect(await decider.paymentsChanged(['unknown'])).to.deep.equal([]);
+  });
+
   it('decides a name again from a late message earlier in chain order', async () => {
     // The transfer to BUYER arrives after the update BUYER signed: first the
     // update is unauthorized, then the transfer turns it applied.

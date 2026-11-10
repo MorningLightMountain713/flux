@@ -332,6 +332,31 @@ function wakeAll() {
 }
 
 /**
+ * Decides again every name a change to these hashes' payments reaches. A
+ * payment recorded in place of one the chain does not hold, moved to the
+ * chain's height, found not on the chain, voided or given back moves its
+ * message in its name's chain order, or out of it: every decision of the name
+ * is removed, and a full pass decides the name again and rebuilds its row.
+ * Called by whatever changes a recorded payment, where no decider run can
+ * interleave: under the chain-state lock, or before chain state is consistent.
+ * @param {string[]} hashes
+ * @returns {Promise<string[]>} the names decided again
+ */
+async function paymentsChanged(hashes) {
+  if (hashes.length === 0) return [];
+  const [decided, held] = await Promise.all([
+    appRecords.decisions().byHashes(hashes),
+    appRecords.messages().byHashes(hashes),
+  ]);
+  const names = new Set([...decided.values()].map((decision) => decision.name));
+  held.forEach((record) => { if (record.name) names.add(record.name.toLowerCase()); });
+  if (names.size === 0) return [];
+  await appRecords.decisions().undecideNames([...names]);
+  wakeAll();
+  return [...names];
+}
+
+/**
  * Starts deciding: a full pass each time chain state becomes consistent and
  * each time the scan catches up, and a pass for whatever the store routes
  * resolve.
@@ -357,6 +382,7 @@ module.exports = {
   idle,
   onDecided,
   onFullPass,
+  paymentsChanged,
   start,
   wake,
   wakeAll,

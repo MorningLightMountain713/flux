@@ -530,7 +530,7 @@ async function processSoftFork(txid, height, txIndex, blockTime, payload, sender
         },
         unclaimedPayments.getUnclaimedPaymentHistory(),
       );
-      await unclaimedPayments.applyVoid(message, height, decider.wake);
+      await unclaimedPayments.applyVoid(message, height, decider.paymentsChanged);
       break;
     case 'policy-group':
       if (!isMessageAuthority(tx)) return;
@@ -631,8 +631,9 @@ async function processInsight(blockDataVerbose) {
 async function insertTransactions(transactions) {
   if (transactions.length > 0) {
     log.info(`Explorer - insertTransactions - Recording ${transactions.length} payments`);
-    const { standing } = await appRecords.messages().recordPayments(transactions);
+    const { standing, replaced } = await appRecords.messages().recordPayments(transactions);
     if (standing.length) log.info(`Explorer - insertTransactions - ${standing.length} payment(s) already recorded stand`);
+    await decider.paymentsChanged(replaced);
     appsTransactions = [];
   }
 }
@@ -1868,7 +1869,7 @@ chainState.onRewind((height) => {
   capabilities.claim('explorerSynced', 'explorerService').lower(`chain state rewound to ${height}`);
 });
 // A rewind that drops a void gives its hash back to the decider.
-chainState.onRewind((height) => unclaimedPayments.onRewind(height, decider.wake));
+chainState.onRewind((height) => unclaimedPayments.onRewind(height, decider.paymentsChanged));
 
 // Registered at require time so the subscription service opens its socket with these
 // already attached. A topic the daemon does not publish simply never delivers, and the

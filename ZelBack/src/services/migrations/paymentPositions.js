@@ -5,6 +5,7 @@ const appRecords = require('../appDatabase/appRecords');
 const daemonServiceUtils = require('../daemonService/daemonServiceUtils');
 const { appPaymentPositions } = require('../appPaymentPositions');
 const chainUtilities = require('../utils/chainUtilities');
+const decider = require('../appDecisions/decider');
 
 // Records written per call: no single call carries every record the backfill
 // writes.
@@ -22,9 +23,10 @@ const BACKFILL_BATCH = 5000;
  * The height is the chain's, not the one recorded: a record written from a block
  * that later left the chain carries a height its transaction is not at. Position
  * and height are set in one write of the hash's record, which carries its
- * contents with it. Records are written BACKFILL_BATCH to a call; a run that
- * stops part way leaves the rest without a position, and the next run takes
- * them.
+ * contents with it. A payment moved to another height or found not on the
+ * chain has its name decided again. Records are written BACKFILL_BATCH to a
+ * call; a run that stops part way leaves the rest without a position, and the
+ * next run takes them.
  * @returns {Promise<{positioned: number, heightsCorrected: number, notOnChain: number, aboveTip: number}>}
  */
 async function backfillPaymentPositions() {
@@ -39,19 +41,22 @@ async function backfillPaymentPositions() {
   const positions = await appPaymentPositions(start, tip.data);
   const placed = [];
   const unmined = [];
-  let heightsCorrected = 0;
+  const moved = [];
   let aboveTip = 0;
   for (const { hash, txid, height } of missing) {
     const position = positions.get(txid);
     if (!position && height > tip.data) {
       aboveTip += 1;
     } else if (position) {
-      if (position.height !== height) heightsCorrected += 1;
+      if (position.height !== height) moved.push(hash);
       placed.push({ hash, txIndex: position.txIndex, height: position.height });
     } else {
       unmined.push(hash);
     }
   }
+  // Before the writes: a run that stops part way leaves the rest for the next
+  // run, which no longer finds the payments already written.
+  await decider.paymentsChanged([...moved, ...unmined]);
   for (let i = 0; i < placed.length; i += BACKFILL_BATCH) {
     // eslint-disable-next-line no-await-in-loop
     await messages.setPositions(placed.slice(i, i + BACKFILL_BATCH));
@@ -61,6 +66,7 @@ async function backfillPaymentPositions() {
     await messages.markAllNotOnChain(unmined.slice(i, i + BACKFILL_BATCH));
   }
   const positioned = placed.length;
+  const heightsCorrected = moved.length;
   const notOnChain = unmined.length;
   log.info(`migrations - payment positions: ${positioned} positioned, ${heightsCorrected} of them at the chain's height rather than the recorded one, ${notOnChain} not on the chain, ${aboveTip} above the daemon's tip`);
   return {

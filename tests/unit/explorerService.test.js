@@ -1430,7 +1430,7 @@ describe('explorerService tests', () => {
         { height: VOID_HEIGHT, tx: [{ ...signedTx('voidTx', VOID_HEIGHT, from, voidHex()), version: 1 }] }, {},
       );
 
-      it('is recorded, kept in the history and applied with the decider\'s wake when the availability key signs it', async () => {
+      it('is recorded, kept in the history and applied with the decider\'s paymentsChanged when the availability key signs it', async () => {
         keyInForce(policy.OracleKeyMessage.ROLE.AVAILABILITY, AVAILABILITY_PUBKEY_HEX);
 
         await walk(AVAILABILITY_ADDR);
@@ -1439,10 +1439,10 @@ describe('explorerService tests', () => {
         expect(voidRows()).to.have.lengthOf(1);
         expect(voidRows()[0].args[1]).to.equal(config.database.chainparams.collections.unclaimedPaymentMessages);
         sinon.assert.calledOnce(applyVoidStub);
-        const [message, height, wake] = applyVoidStub.firstCall.args;
+        const [message, height, paymentsChanged] = applyVoidStub.firstCall.args;
         expect(message.hashHex).to.equal(HASH_HEX);
         expect(height).to.equal(VOID_HEIGHT);
-        expect(wake).to.equal(decider.wake);
+        expect(paymentsChanged).to.equal(decider.paymentsChanged);
       });
 
       it('is refused from the oracle key, whose role is the rate', async () => {
@@ -1883,6 +1883,24 @@ describe('explorerService tests', () => {
 
       const inserted = messages.recordPayments.getCalls().flatMap((call) => call.args[0]);
       expect(inserted.map((record) => [record.txid, record.txIndex, record.blockTime])).to.deep.equal([['first', 1, 1_700_000_000]]);
+    });
+
+    it('has a hash\'s name decided again when it records its payment in place of one the chain does not hold', async () => {
+      const PAYMENT_HEIGHT = 983_001;
+      cursor = PAYMENT_HEIGHT - 1;
+      daemonStatus.daemonSyncState.returns({ synced: true, height: PAYMENT_HEIGHT });
+      blockAt = (height) => ({ height, time: 1_700_000_000, tx: [paymentTx('coinbase', 0), paymentTx('again')] });
+      messages.recordPayments.callsFake(async (payments) => {
+        const hashes = payments.map((payment) => payment.hash);
+        return { recorded: hashes, standing: [], replaced: hashes };
+      });
+      const paymentsChanged = sinon.stub(decider, 'paymentsChanged').resolves([]);
+
+      await explorerService.startScanning();
+
+      const [recorded] = messages.recordPayments.firstCall.args[0];
+      sinon.assert.calledOnceWithExactly(paymentsChanged, [recorded.hash]);
+      sinon.assert.callOrder(messages.recordPayments, paymentsChanged);
     });
 
     it('fails the block, rather than dropping the payment, when the record lookup fails', async () => {

@@ -15,8 +15,7 @@ describe('unclaimedPayments', () => {
   let records;
   let voidRows;
   let updates;
-  let undecided;
-  let woken;
+  let changed;
   let duringLibraryLoad;
   let OPENS;
   let FINAL;
@@ -42,14 +41,13 @@ describe('unclaimedPayments', () => {
     txid: `void-${height}-${txIndex}`, vout: 1, height, txIndex, message: parsedVoid(hashHex),
   });
 
-  const wake = (hashes) => woken.push([...hashes]);
+  const paymentsChanged = async (hashes) => { changed.push([...hashes]); };
 
   beforeEach(() => {
     records = new Map();
     voidRows = [];
     updates = [];
-    undecided = [];
-    woken = [];
+    changed = [];
     duringLibraryLoad = null;
     unclaimedPayments = proxyquire('../../ZelBack/src/services/appDecisions/unclaimedPayments', {
       '../dbHelper': {
@@ -57,7 +55,6 @@ describe('unclaimedPayments', () => {
         findInDatabase: async () => voidRows.map((row) => ({ ...row })),
       },
       '../appDatabase/appRecords': {
-        decisions: () => ({ undecide: async (hashes) => undecided.push(...hashes) }),
         messages: () => ({
           payment: async (hash) => {
             const record = records.get(hash);
@@ -139,24 +136,22 @@ describe('unclaimedPayments', () => {
   });
 
   describe('applyVoid', () => {
-    it('marks the payment voided, removes its decision and wakes the decider for it', async () => {
+    it('marks the payment voided and has its name decided again', async () => {
       pay(HASH);
 
-      const voided = await unclaimedPayments.applyVoid(parsedVoid(HASH), PAYMENT_HEIGHT + OPENS, wake);
+      const voided = await unclaimedPayments.applyVoid(parsedVoid(HASH), PAYMENT_HEIGHT + OPENS, paymentsChanged);
 
       expect(voided).to.equal(true);
       expect(updates).to.deep.equal([{ hash: HASH, update: { $set: { voided: true } } }]);
-      expect(undecided).to.deep.equal([HASH]);
-      expect(woken).to.deep.equal([[HASH]]);
+      expect(changed).to.deep.equal([[HASH]]);
     });
 
     it('changes nothing for a payment this node has no record of', async () => {
-      const voided = await unclaimedPayments.applyVoid(parsedVoid(HASH), PAYMENT_HEIGHT + OPENS, wake);
+      const voided = await unclaimedPayments.applyVoid(parsedVoid(HASH), PAYMENT_HEIGHT + OPENS, paymentsChanged);
 
       expect(voided).to.equal(false);
       expect(updates).to.deep.equal([]);
-      expect(undecided).to.deep.equal([]);
-      expect(woken).to.deep.equal([]);
+      expect(changed).to.deep.equal([]);
     });
 
     it('takes effect at both edges of the window and nowhere outside it', async () => {
@@ -164,7 +159,7 @@ describe('unclaimedPayments', () => {
         records.clear();
         updates.length = 0;
         pay(HASH);
-        return unclaimedPayments.applyVoid(parsedVoid(HASH), PAYMENT_HEIGHT + offset, wake);
+        return unclaimedPayments.applyVoid(parsedVoid(HASH), PAYMENT_HEIGHT + offset, paymentsChanged);
       };
 
       expect(await at(OPENS - 1)).to.equal(false);
@@ -183,36 +178,34 @@ describe('unclaimedPayments', () => {
       VOID_HEIGHT = PAYMENT_HEIGHT + OPENS + 10;
     });
 
-    it('gives back a hash whose only void the rewind dropped: unmarked, undecided and woken', async () => {
+    it('gives back a hash whose only void the rewind dropped: unmarked, and its name decided again', async () => {
       await install([voidRow(HASH, VOID_HEIGHT)]);
       pay(HASH, { voided: true });
 
-      const given = await unclaimedPayments.onRewind(VOID_HEIGHT, wake);
+      const given = await unclaimedPayments.onRewind(VOID_HEIGHT, paymentsChanged);
 
       expect(given).to.deep.equal([HASH]);
       expect(updates).to.deep.equal([{ hash: HASH, update: { $unset: { voided: '' } } }]);
       expect(records.get(HASH).voided).to.equal(undefined);
-      expect(undecided).to.deep.equal([HASH]);
-      expect(woken).to.deep.equal([[HASH]]);
+      expect(changed).to.deep.equal([[HASH]]);
     });
 
     it('keeps a hash that a void below the rewind still reaches', async () => {
       await install([voidRow(HASH, VOID_HEIGHT - 5), voidRow(HASH, VOID_HEIGHT)]);
       pay(HASH, { voided: true });
 
-      const given = await unclaimedPayments.onRewind(VOID_HEIGHT, wake);
+      const given = await unclaimedPayments.onRewind(VOID_HEIGHT, paymentsChanged);
 
       expect(given).to.deep.equal([]);
       expect(updates).to.deep.equal([]);
-      expect(undecided).to.deep.equal([]);
-      expect(woken).to.deep.equal([]);
+      expect(changed).to.deep.equal([]);
     });
 
     it('gives back a hash whose remaining void is outside the window', async () => {
       await install([voidRow(HASH, PAYMENT_HEIGHT + OPENS - 1), voidRow(HASH, VOID_HEIGHT)]);
       pay(HASH, { voided: true });
 
-      const given = await unclaimedPayments.onRewind(VOID_HEIGHT, wake);
+      const given = await unclaimedPayments.onRewind(VOID_HEIGHT, paymentsChanged);
 
       expect(given).to.deep.equal([HASH]);
     });
@@ -221,18 +214,18 @@ describe('unclaimedPayments', () => {
       await install([voidRow(HASH, VOID_HEIGHT), voidRow(OTHER, VOID_HEIGHT, 1)]);
       pay(HASH);
 
-      const given = await unclaimedPayments.onRewind(VOID_HEIGHT, wake);
+      const given = await unclaimedPayments.onRewind(VOID_HEIGHT, paymentsChanged);
 
       expect(given).to.deep.equal([]);
       expect(updates).to.deep.equal([]);
-      expect(woken).to.deep.equal([]);
+      expect(changed).to.deep.equal([]);
     });
 
     it('leaves a void below the rewind alone', async () => {
       await install([voidRow(HASH, VOID_HEIGHT)]);
       pay(HASH, { voided: true });
 
-      const given = await unclaimedPayments.onRewind(VOID_HEIGHT + 1, wake);
+      const given = await unclaimedPayments.onRewind(VOID_HEIGHT + 1, paymentsChanged);
 
       expect(given).to.deep.equal([]);
       expect(updates).to.deep.equal([]);
@@ -245,16 +238,16 @@ describe('unclaimedPayments', () => {
         unclaimedPaymentHistory: new flux.UnclaimedPaymentHistory(),
       });
 
-      const given = await unclaimedPayments.onRewind(VOID_HEIGHT, wake);
+      const given = await unclaimedPayments.onRewind(VOID_HEIGHT, paymentsChanged);
 
       expect(given).to.deep.equal([HASH]);
     });
 
     it('does nothing before the state is built', async () => {
-      const given = await unclaimedPayments.onRewind(VOID_HEIGHT, wake);
+      const given = await unclaimedPayments.onRewind(VOID_HEIGHT, paymentsChanged);
 
       expect(given).to.deep.equal([]);
-      expect(woken).to.deep.equal([]);
+      expect(changed).to.deep.equal([]);
     });
   });
 });

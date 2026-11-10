@@ -176,7 +176,7 @@ const MESSAGE_ANSWERS = {
   payment: null,
   payments: new Map(),
   recordPayment: 'recorded',
-  recordPayments: { recorded: [], standing: [] },
+  recordPayments: { recorded: [], standing: [], replaced: [] },
   awaitingContents: [],
   removePaymentsAbove: { kept: 0, removed: 0 },
   clearPayments: { kept: 0, removed: 0 },
