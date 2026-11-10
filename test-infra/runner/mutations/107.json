@@ -1,0 +1,23 @@
+[
+  {
+    "name": "no-missing-contents-fetched",
+    "breaks": "a node fetches from its peers the contents of every paid message it does not hold",
+    "edits": [
+      {
+        "file": "ZelBack/src/services/appMessaging/appHashSyncService.js",
+        "from": "  const results = await appRecords.messages().awaitingContents({ height: currentHeight, force });\n  return results.filter((r) => {",
+        "to": "  const results = await appRecords.messages().awaitingContents({ height: currentHeight, force });\n  return results.filter(() => false).filter((r) => {"
+      }
+    ],
+    "red": [
+      "Hash sync: late-joining node should resolve hash by fetching permanent message from peers",
+      "Hash sync: late-joining node should create permanent message from resolved hash",
+      "Hash sync: late-joining node should create app spec from permanent message",
+      "Hash sync: network partition should resolve hash after reconnecting to network",
+      "Hash sync: network partition should create permanent message from resolved hash",
+      "Hash sync: network partition should create app spec from permanent message",
+      "Hash sync: stale state recovery stores the message again from its peers",
+      "Hash sync: stale state recovery holds exactly that message again"
+    ]
+  }
+]

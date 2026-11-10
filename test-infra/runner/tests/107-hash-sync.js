@@ -2,8 +2,7 @@
 import { describe, it, before, after } from 'mocha';
 import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
-import { nodeKey, fluxTeamKey } from '../framework/keys.js';
-import { authenticate } from '../auth.js';
+import { nodeKey } from '../framework/keys.js';
 import { buildAppSpec, registerAndConfirm } from '../framework/app-helper.js';
 import { waitForDaemonReady, waitForBlockProcessed, waitFor, waitForNodeStatus } from '../framework/wait.js';
 import { advanceBlock, startTicker } from '../framework/daemon-control.js';
@@ -136,14 +135,12 @@ describe('Hash sync: network partition', function () {
   });
 });
 
-// A node that has lost a message it received finds the loss with the hash audit, which an
-// operator runs through /apps/reconstructhashes, and stores the message again on the next block,
-// from the copy its temporary pool still holds.
+// A node that holds a message's payment and has lost its contents asks its
+// peers for them again and stores the same message.
 describe('Hash sync: stale state recovery', function () {
   let env;
   let appHash;
   let db;
-  let audit;
 
   before(async function () {
     this.timeout(300000);
@@ -152,18 +149,13 @@ describe('Hash sync: stale state recovery', function () {
     ({ appHash } = await registerApp(env));
 
     db = dbClient(env.nodeCount);
-    await waitFor(async () => (await db.appHashRecord(appHash))?.message === true
-      && (await db.permanentMessages({ hash: appHash })).length === 1,
-    { timeout: 60000, interval: 5000, label: `node ${env.nodeCount} holds the message` });
-
-    const node = env.clients[env.nodeCount - 1];
-    const auth = await authenticate(node.url, fluxTeamKey());
-    // An audit with nothing lost, so the one after the loss corrects that loss alone.
-    const settled = await node.reconstructHashes(auth.zelidauth);
-    expect(settled.status, JSON.stringify(settled)).to.equal('success');
-    // the record still says the message was received
+    await waitFor(async () => (await db.appHashRecord(appHash))?.message === true,
+      { timeout: 60000, interval: 5000, label: `node ${env.nodeCount} holds the message` });
     await db.deletePermanentMessage(appHash);
-    audit = await node.reconstructHashes(auth.zelidauth);
+    // The canary: the node holds the payment and not the contents.
+    const record = await db.appHashRecord(appHash);
+    expect(record.message, 'the contents are gone').to.equal(false);
+    expect(record.txid, 'the payment stays').to.be.a('string');
   });
 
   after(async function () {
@@ -171,26 +163,13 @@ describe('Hash sync: stale state recovery', function () {
     await env?.teardown();
   });
 
-  it('marks the lost message missing', async () => {
-    expect(audit.status, JSON.stringify(audit)).to.equal('success');
-    expect(audit.data.message.changed).to.equal(1);
-  });
-
-  it('stores the message again on the next block', async function () {
-    this.timeout(150000);
-    await waitFor(async () => (await db.appHashRecord(appHash))?.message === true
-      && (await db.permanentMessages({ hash: appHash })).length === 1,
-    { timeout: 120000, interval: 2000, label: `node ${env.nodeCount} stored the message again` });
+  it('stores the message again from its peers', async function () {
+    this.timeout(240000);
+    await waitFor(async () => (await db.appHashRecord(appHash))?.message === true,
+      { timeout: 210000, interval: 2000, label: `node ${env.nodeCount} stored the message again` });
   });
 
   it('holds exactly that message again', async () => {
-    expect((await db.permanentMessages({ hash: appHash })).map((m) => m.hash)).to.deep.equal([appHash]);
+    expect((await db.appMessages({ hash: appHash, held: true })).map((m) => m.hash)).to.deep.equal([appHash]);
   });
 });
-
-// Scenario 4 (missing hashes / bulk sync) was removed: the bulk hash sync
-// (checkAndSyncAppHashes) only runs once at startup. Deleting a hash after
-// startup cannot be rediscovered — the node would need to re-process the
-// block from the explorer. The late-joining node scenario (scenario 1)
-// already covers the bootstrap path where a fresh node discovers hashes
-// from block processing and resolves messages via peer sync.
