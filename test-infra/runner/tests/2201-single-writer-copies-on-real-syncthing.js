@@ -2,7 +2,9 @@
 import { describe, it, before, after } from 'mocha';
 import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
-import { execInContainer, isAppContainerRunning } from '../framework/container.js';
+import {
+  componentIdentifier, execInContainer, isAppContainerRunning, legacyFolderId,
+} from '../framework/container.js';
 import { pushTestApp, mirrorExecutorImage, executorImageReference } from '../framework/registry-helper.js';
 import { buildSeedableApp } from '../framework/seed-helper.js';
 import { bootAndPeer, installOnNodes } from '../framework/reconciler-suite.js';
@@ -38,8 +40,8 @@ describe('single-writer copies on real syncthing', function () {
   dumpLogsOnFailure(() => env);
 
   const appName = `e2eswcopy${Date.now()}`;
-  const folder = `flux${appName}_${appName}`;
-  const root = `/mnt/appdata/flux-apps/${folder}`;
+  const folder = legacyFolderId(appName);
+  let root;
   const HOLDERS = [0, 1];
   let primary;
   let standby;
@@ -114,6 +116,8 @@ describe('single-writer copies on real syncthing', function () {
         repoauth: '',
       }],
     });
+
+    root = `/mnt/appdata/flux-apps/${componentIdentifier(app)}`;
 
     // One holder first, so it is the only candidate and seeds the folder; the
     // second is placed once the first is writing, and follows it.

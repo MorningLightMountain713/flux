@@ -2,7 +2,7 @@
 import { describe, it, before, after } from 'mocha';
 import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
-import { execInContainer, getAppContainerStatus } from '../framework/container.js';
+import { appContainerName, execInContainer, getAppContainerStatus } from '../framework/container.js';
 import {
   waitFor, waitForUp, waitForAppInstalled, assertNoEvent,
 } from '../framework/wait.js';
@@ -80,7 +80,6 @@ const outOfServiceForTheStall = (data) => data.dosState >= 100
 // an app's slice, inside flux-apps.slice; the app names here have no '-', which
 // a slice name escapes
 const sliceOf = (appName) => `flux-apps-${appName}.slice`;
-const containerOf = (appName) => `flux${appName}_${appName}`;
 // what of the app can still run, read from its slice, which outlives its containers
 async function sliceProcessesThatCanRun(container, appName) {
   return processesThatCanRun(container, await unitCgroup(container, sliceOf(appName)));
@@ -143,7 +142,7 @@ describe('a stalled host takes the node out of service', function () {
   });
 
   it('runs the app in its own slice', async function () {
-    const cgroup = await containerCgroup(container, containerOf(appName));
+    const cgroup = await containerCgroup(container, await appContainerName(container, appName));
     const slice = await unitCgroup(container, sliceOf(appName)).catch(() => null);
     expect(slice !== null && cgroup.startsWith(`${slice}/`), `the app container is in ${cgroup}, not in its slice ${slice}, so the kill below has nothing to find`).to.equal(true);
   });
@@ -248,7 +247,7 @@ describe('a stalled host takes the node out of service', function () {
       killClient = env.clients[index];
       ({ container: killContainer } = killClient);
       await waitForUp(killClient, killedName, 'the app is up');
-      appCgroup = await containerCgroup(killContainer, containerOf(killedName));
+      appCgroup = await containerCgroup(killContainer, await appContainerName(killContainer, killedName));
       anchor = killClient.getLastEventId();
       step(`freezing node ${index}`);
       await freezeDocker(killContainer);

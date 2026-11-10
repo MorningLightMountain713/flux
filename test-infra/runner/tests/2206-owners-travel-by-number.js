@@ -2,7 +2,7 @@ import { describe, it, before, after } from 'mocha';
 import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
 import {
-  execInContainer, isAppContainerRunning, crashFluxos, releaseFluxos,
+  componentIdentifier, crashFluxos, execInContainer, isAppContainerRunning, legacyFolderId, releaseFluxos,
 } from '../framework/container.js';
 import { pushTestApp } from '../framework/registry-helper.js';
 import { buildSeedableApp } from '../framework/seed-helper.js';
@@ -60,9 +60,9 @@ describe('owners travel by number on real syncthing', function () {
   dumpLogsOnFailure(() => env);
 
   const appName = `e2eownnum${Date.now()}`;
-  const folder = `flux${appName}_${appName}`;
-  const root = `/mnt/appdata/flux-apps/${folder}`;
-  const data = `${root}/appdata`;
+  const folder = legacyFolderId(appName);
+  let root;
+  let data;
   const image = `${REGISTRY_REPO_HOST}/${appName}:v1`;
   // Placed in this order, so the election ranks them in it: a legacy primary, an
   // Arcane standby, and a legacy standby whose FluxOS runs as an unprivileged
@@ -171,6 +171,8 @@ describe('owners travel by number on real syncthing', function () {
         repoauth: '',
       }],
     });
+    root = `/mnt/appdata/flux-apps/${componentIdentifier(app)}`;
+    data = `${root}/appdata`;
 
     await installOnNodes(env, app, [PRIMARY]);
     await waitForUp(client(PRIMARY), appName, 'the legacy primary runs the app', { timeout: 300000, interval: 3000 });

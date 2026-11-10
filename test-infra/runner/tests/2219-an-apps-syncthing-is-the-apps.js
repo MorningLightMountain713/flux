@@ -1,7 +1,7 @@
 import { describe, it, before, after } from 'mocha';
 import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
-import { execInContainer } from '../framework/container.js';
+import { componentIdentifier, execInContainer, legacyFolderId } from '../framework/container.js';
 import { mirrorImage, pushTestApp } from '../framework/registry-helper.js';
 import { buildSeedableApp } from '../framework/seed-helper.js';
 import { bootAndPeer, installOnNodes } from '../framework/reconciler-suite.js';
@@ -44,8 +44,8 @@ describe('an app\'s syncthing is the app\'s', function () {
   const stamp = Date.now();
   const syncthingApp = `e2eappsyncthing${stamp}`;
   const appName = `e2eownbeside${stamp}`;
-  const folder = `flux${appName}_${appName}`;
-  const data = `/mnt/appdata/flux-apps/${folder}/appdata`;
+  const folder = legacyFolderId(appName);
+  let data;
   const LEGACY = 0;
   const ARCANE = 1;
 
@@ -167,6 +167,7 @@ describe('an app\'s syncthing is the app\'s', function () {
         repoauth: '',
       }],
     });
+    data = `/mnt/appdata/flux-apps/${componentIdentifier(app)}/appdata`;
     await installOnNodes(env, app, [LEGACY]);
     await waitForUp(client(LEGACY), appName, 'the legacy node runs the app', { timeout: 300000, interval: 3000 });
     await installOnNodes(env, app, [ARCANE]);

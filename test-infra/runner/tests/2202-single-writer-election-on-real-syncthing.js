@@ -3,8 +3,8 @@ import { describe, it, before, after } from 'mocha';
 import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
 import {
-  execInContainer, isAppContainerRunning, blockPeerAccess, unblockPeerAccess,
-  blockTraffic, unblockTraffic, crashFluxos, releaseFluxos,
+  appContainerName, componentIdentifier, execInContainer, isAppContainerRunning, blockPeerAccess, unblockPeerAccess,
+  blockTraffic, unblockTraffic, crashFluxos, legacyFolderId, releaseFluxos,
 } from '../framework/container.js';
 import { pushTestApp } from '../framework/registry-helper.js';
 import { buildSeedableApp } from '../framework/seed-helper.js';
@@ -50,9 +50,9 @@ describe('single-writer election on real syncthing', function () {
   dumpLogsOnFailure(() => env);
 
   const appName = `e2eswelect${Date.now()}`;
-  const identifier = `${appName}_${appName}`;
-  const folder = `flux${identifier}`;
-  const root = `/mnt/appdata/flux-apps/${folder}`;
+  const folder = legacyFolderId(appName);
+  let identifier;
+  let root;
   // Placed in this order; a fourth node holds nothing and keeps the ring whole
   // while one link is cut.
   const FIRST = 0;
@@ -114,6 +114,8 @@ describe('single-writer election on real syncthing', function () {
         repoauth: '',
       }],
     });
+    identifier = componentIdentifier(app);
+    root = `/mnt/appdata/flux-apps/${identifier}`;
 
     // Placed one at a time: a node learns of the app only when it is installed,
     // so no spawner can place it out of order.
@@ -170,8 +172,9 @@ describe('single-writer election on real syncthing', function () {
   it('replaces a primary that dies with the standby that was connected to it', async function () {
     this.timeout(420000);
     // The whole machine: the process, the container and the daemon.
+    const container = await appContainerName(client(FIRST).container, appName);
     await crashFluxos(client(FIRST).container, { hold: true });
-    await execInContainer(client(FIRST).container, `docker kill flux${appName}_${appName}`);
+    await execInContainer(client(FIRST).container, `docker kill ${container}`);
     await stopDaemon(client(FIRST));
 
     await waitHolding(async () => (await oneWriterAtMost()).includes(SECOND), {

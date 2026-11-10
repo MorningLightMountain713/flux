@@ -1,7 +1,9 @@
 import { describe, it, before, after } from 'mocha';
 import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
-import { execInContainer, crashFluxos, releaseFluxos } from '../framework/container.js';
+import {
+  componentIdentifier, crashFluxos, execInContainer, legacyFolderId, releaseFluxos,
+} from '../framework/container.js';
 import { pushTestApp } from '../framework/registry-helper.js';
 import { buildSeedableApp } from '../framework/seed-helper.js';
 import { bootAndPeer, installOnNodes } from '../framework/reconciler-suite.js';
@@ -49,8 +51,8 @@ describe('a legacy node\'s syncthing takes the numeric id tables before any owne
   dumpLogsOnFailure(() => env);
 
   const appName = `e2eownlegacy${Date.now()}`;
-  const folder = `flux${appName}_${appName}`;
-  const data = `/mnt/appdata/flux-apps/${folder}/appdata`;
+  const folder = legacyFolderId(appName);
+  let data;
   const LEGACY = 0;
   const ARCANE = 1;
 
@@ -117,6 +119,7 @@ describe('a legacy node\'s syncthing takes the numeric id tables before any owne
         repoauth: '',
       }],
     });
+    data = `/mnt/appdata/flux-apps/${componentIdentifier(app)}/appdata`;
     await installOnNodes(env, app, [LEGACY]);
     await waitForUp(client(LEGACY), appName, 'the legacy node runs the app', { timeout: 300000, interval: 3000 });
     await installOnNodes(env, app, [ARCANE]);

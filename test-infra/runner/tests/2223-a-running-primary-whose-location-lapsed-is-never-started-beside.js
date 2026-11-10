@@ -6,7 +6,7 @@ import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
 import { pushImage } from '../framework/registry-helper.js';
 import { buildSeedableSyncthingApp } from '../framework/seed-helper.js';
-import { crashFluxos, getAppContainerStatus } from '../framework/container.js';
+import { appDataRoot, crashFluxos, getAppContainerStatus } from '../framework/container.js';
 import { electMaster, clearMaster, resetFdm } from '../framework/fdm-control.js';
 import {
   waitFor, waitForReconcileActuated, waitForUp, waitForElectionDecisions,
@@ -35,7 +35,6 @@ const LOCATION_TTL_S = 240;
 const SIGTERM_EXPIRY_S = 120;
 // The lapse, the shutdown window a release would wait out, and several passes beyond.
 const WATCHED_MS = (LOCATION_TTL_S + SIGTERM_EXPIRY_S) * 1000 + 8 * 60 * 1000;
-const appDir = (name) => `/mnt/appdata/flux-apps/flux${name}_${name}`;
 
 describe('a running primary whose location lapsed is never started beside', function () {
   let env;
@@ -83,7 +82,7 @@ describe('a running primary whose location lapsed is never started beside', func
     const standbyAfter = client(A).getLastEventId();
     await installOnNodes(env, app, [A]);
     await waitForReconcileActuated(client(A), identifier, 'dataCleared', 120000, { afterId: standbyAfter });
-    await waitFor(async () => (await listFolderFiles(client(A), `${appDir(appName)}/appdata`)).split(' ').includes('seed-data'), {
+    await waitFor(async () => (await listFolderFiles(client(A), `${await appDataRoot(client(A).container, appName)}/appdata`)).split(' ').includes('seed-data'), {
       timeout: 240000, interval: 5000, label: 'the primary\'s data reached the standby',
     });
     await waitForElectionDecisions(client(A), identifier, 'primaryObserved', 1, { timeout: 60000 });

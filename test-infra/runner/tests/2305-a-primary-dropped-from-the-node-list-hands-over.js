@@ -4,7 +4,7 @@ import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
 import { pushImage } from '../framework/registry-helper.js';
 import { buildSeedableSyncthingApp } from '../framework/seed-helper.js';
-import { getAppContainerStatus } from '../framework/container.js';
+import { appDataRoot, getAppContainerStatus } from '../framework/container.js';
 import { electMaster, clearMaster, resetFdm } from '../framework/fdm-control.js';
 import { setNodeStatus, removeFromNodeList } from '../framework/daemon-control.js';
 import {
@@ -39,7 +39,6 @@ const NODE_MONITOR_INTERVAL_MS = 60 * 60 * 1000;
 // Production's whole handover, from FDM going quiet to the standby running it.
 const HANDOVER_MS = 5 * 60 * 1000;
 
-const appDir = (name) => `/mnt/appdata/flux-apps/flux${name}_${name}`;
 
 async function isUp(client, appName) {
   const status = await getAppContainerStatus(client.container, appName);
@@ -116,7 +115,7 @@ describe('a primary dropped from the node list hands its app over', function () 
       { timeout: 180000, interval: 3000, label: 'the standby verified the primary' },
     );
     await waitFor(
-      async () => (await listFolderFiles(env.clients[A], `${appDir(appName)}/appdata`)).split(' ').includes('seed-data'),
+      async () => (await listFolderFiles(env.clients[A], `${await appDataRoot(env.clients[A].container, appName)}/appdata`)).split(' ').includes('seed-data'),
       { timeout: 240000, interval: 5000, label: 'the primary\'s data reached the standby' },
     );
     // The standby has read the primary off FDM, so once FDM goes quiet it asks the

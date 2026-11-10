@@ -26,7 +26,9 @@
 import { describe, it, before, after, beforeEach, afterEach } from 'mocha';
 import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
-import { execInContainer, restartDockerd, restartFluxos } from '../framework/container.js';
+import {
+  appContainerName, execInContainer, restartDockerd, restartFluxos,
+} from '../framework/container.js';
 import { pushBusybox } from '../framework/registry-helper.js';
 import { buildSeedableApp } from '../framework/seed-helper.js';
 import { bootAndPeer, seedSpawnerApp } from '../framework/reconciler-suite.js';
@@ -532,7 +534,7 @@ describe('2502 app containers are kept off private networks and off each other\'
     let appName;
     let appPorts;
     let appBridge;
-    const container = (component) => `flux${component}_${appName}`;
+    const container = (component) => appContainerName(node.container, appName, component);
 
     before(async function install() {
       this.timeout(300000);
@@ -574,19 +576,22 @@ describe('2502 app containers are kept off private networks and off each other\'
     });
 
     it('connects its components to each other', async () => {
-      const back = await containerIp(container('back'));
-      expect(await tcpAnswer(container('front'), back, TCP_PORT)).to.equal('ok');
+      const front = await container('front');
+      const back = await containerIp(await container('back'));
+      expect(await tcpAnswer(front, back, TCP_PORT)).to.equal('ok');
     });
 
     it('answers another app on its published ports, and not on its containers', async () => {
       expect(await tcpAnswer('fluxe2eprobe', node.ip, appPorts[0])).to.equal('ok');
-      await expectTcpBlocked('fluxe2eprobe', await containerIp(container('front')), TCP_PORT);
-      await expectTcpBlocked(container('front'), await containerIp('fluxe2epeer'), TCP_PORT);
+      const front = await container('front');
+      await expectTcpBlocked('fluxe2eprobe', await containerIp(front), TCP_PORT);
+      await expectTcpBlocked(front, await containerIp('fluxe2epeer'), TCP_PORT);
     });
 
     it('keeps its containers off the owner\'s LANs', async () => {
-      await expectTcpBlocked(container('front'), BRIDGE_LAN.host, TCP_PORT);
-      await expectTcpBlocked(container('front'), UPLINK_LAN.privateHost, TCP_PORT);
+      const front = await container('front');
+      await expectTcpBlocked(front, BRIDGE_LAN.host, TCP_PORT);
+      await expectTcpBlocked(front, UPLINK_LAN.privateHost, TCP_PORT);
     });
 
     it('drops its network\'s rules when FluxOS removes the app', async function removal() {

@@ -3,7 +3,7 @@ import { describe, it, before, after } from 'mocha';
 import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
 import {
-  isAppContainerRunning, shutdownFluxosGracefully, releaseFluxos, blockTraffic, unblockTraffic,
+  blockTraffic, componentIdentifier, isAppContainerRunning, legacyFolderId, releaseFluxos, shutdownFluxosGracefully, unblockTraffic,
 } from '../framework/container.js';
 import { pushTestApp } from '../framework/registry-helper.js';
 import { buildSeedableApp } from '../framework/seed-helper.js';
@@ -39,8 +39,8 @@ describe('a graceful shutdown drains to the standby and holds still', function (
   dumpLogsOnFailure(() => env);
 
   const appName = `e2eswdrain${Date.now()}`;
-  const folder = `flux${appName}_${appName}`;
-  const root = `/mnt/appdata/flux-apps/${folder}`;
+  const folder = legacyFolderId(appName);
+  let root;
   const HOLDERS = [0, 1];
   const [FIRST, SECOND] = HOLDERS;
   const client = (i) => env.clients[i];
@@ -83,6 +83,7 @@ describe('a graceful shutdown drains to the standby and holds still', function (
         repoauth: '',
       }],
     });
+    root = `/mnt/appdata/flux-apps/${componentIdentifier(app)}`;
 
     await installOnNodes(env, app, [FIRST]);
     await waitForUp(client(FIRST), appName, 'the first holder runs the app', { timeout: 300000, interval: 3000 });

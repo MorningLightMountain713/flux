@@ -2,7 +2,7 @@
 import { describe, it, before, after } from 'mocha';
 import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
-import { pm2Registration, shutdownFluxosUnderPm2 } from '../framework/container.js';
+import { componentIdentifier, pm2Registration, shutdownFluxosUnderPm2 } from '../framework/container.js';
 import { pushTestApp } from '../framework/registry-helper.js';
 import { buildSeedableApp } from '../framework/seed-helper.js';
 import { bootAndPeer, installOnNodes } from '../framework/reconciler-suite.js';
@@ -51,10 +51,8 @@ describe('a legacy node under pm2 drains within its kill timeout', function () {
     [TIMED]: `e2epm2timed${stamp}`,
     [DEFAULT]: `e2epm2default${stamp}`,
   };
-  const saveOnStandby = (primary) => {
-    const folder = `flux${apps[primary]}_${apps[primary]}`;
-    return `/mnt/appdata/flux-apps/${folder}/appdata/${FINAL_SAVE}`;
-  };
+  const built = {};
+  const saveOnStandby = (primary) => `/mnt/appdata/flux-apps/${componentIdentifier(built[primary])}/appdata/${FINAL_SAVE}`;
 
   const buildApp = async (name, pinnedTo) => {
     await pushTestApp(name, 'v1', name, { user: APP_UID });
@@ -107,6 +105,7 @@ describe('a legacy node under pm2 drains within its kill timeout', function () {
       const name = apps[primary];
       // eslint-disable-next-line no-await-in-loop
       const app = await buildApp(name, [primary, STANDBY]);
+      built[primary] = app;
       // eslint-disable-next-line no-await-in-loop
       await installOnNodes(env, app, [primary]);
       // eslint-disable-next-line no-await-in-loop

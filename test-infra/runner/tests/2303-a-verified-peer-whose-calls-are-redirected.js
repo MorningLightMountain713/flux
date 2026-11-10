@@ -4,7 +4,7 @@ import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
 import { pushImage } from '../framework/registry-helper.js';
 import { buildSeedableSyncthingApp } from '../framework/seed-helper.js';
-import { redirectOutbound, clearOutboundRedirect, getAppContainerStatus } from '../framework/container.js';
+import { appDataRoot, clearOutboundRedirect, getAppContainerStatus, redirectOutbound } from '../framework/container.js';
 import { electMaster, clearMaster, resetFdm } from '../framework/fdm-control.js';
 import {
   waitFor, waitForReconcileActuated, waitForUp, waitForElectionDecisions, electionDecisionCount,
@@ -40,7 +40,6 @@ const VERIFIED_TTL_MS = 30 * 60 * 1000;
 // pass or two.
 const MISROUTED_TTL_MS = 10000;
 
-const appDir = (name) => `/mnt/appdata/flux-apps/flux${name}_${name}`;
 
 async function isUp(client, appName) {
   const status = await getAppContainerStatus(client.container, appName);
@@ -120,7 +119,7 @@ describe('a verified peer whose calls are redirected between the question and th
       { timeout: 180000, interval: 3000, label: 'the standby verified the primary' },
     );
     await waitFor(
-      async () => (await listFolderFiles(env.clients[A], `${appDir(appName)}/appdata`)).split(' ').includes('seed-data'),
+      async () => (await listFolderFiles(env.clients[A], `${await appDataRoot(env.clients[A].container, appName)}/appdata`)).split(' ').includes('seed-data'),
       { timeout: 240000, interval: 5000, label: 'the primary\'s data reached the standby' },
     );
     // The standby has read the primary off FDM, so it knows which node it must not
