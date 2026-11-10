@@ -760,25 +760,6 @@ export function dbClient(nodeNum) {
       await globalDb.collection('zelappsinformation').deleteOne({ name });
     },
 
-    async seedPermanentMessages(msgs) {
-      const globalDb = await db('appsGlobal');
-      await globalDb.collection('zelappsmessages').insertMany(msgs.map((msg) => ({ ...msg })));
-    },
-
-    // The node's record of app payments its scan found: { hash, txid, height, txIndex, value,
-    // message }. An entry without a position takes the next one at its height, in entry order.
-    async seedAppHashes(entries) {
-      const explorerDb = await db('explorer');
-      const nextAtHeight = new Map();
-      const records = entries.map((entry) => {
-        if (Number.isInteger(entry.txIndex)) return { ...entry };
-        const txIndex = nextAtHeight.get(entry.height) ?? 0;
-        nextAtHeight.set(entry.height, txIndex + 1);
-        return { ...entry, txIndex };
-      });
-      await explorerDb.collection('zelappshashes').insertMany(records);
-    },
-
     // The app message records this node holds, matching a query: each the payment
     // half (txid, height, txIndex, value) and the contents half (type, timestamp,
     // signature, appSpecifications) it has.
@@ -806,36 +787,6 @@ export function dbClient(nodeNum) {
       return executionStats;
     },
 
-    async permanentMessages(query = {}) {
-      const globalDb = await db('appsGlobal');
-      return globalDb.collection('zelappsmessages').find(query, { projection: { _id: 0 } }).toArray();
-    },
-
-    async appHashRecords(query = {}) {
-      const explorerDb = await db('explorer');
-      return explorerDb.collection('zelappshashes').find(query, { projection: { _id: 0 } }).toArray();
-    },
-
-    async insertAppHashRecord(record) {
-      const explorerDb = await db('explorer');
-      await explorerDb.collection('zelappshashes').insertOne(record);
-    },
-
-    async appHashIndexes() {
-      const explorerDb = await db('explorer');
-      return explorerDb.collection('zelappshashes').indexes();
-    },
-
-    async explainAppHashes(query) {
-      const explorerDb = await db('explorer');
-      const { executionStats } = await explorerDb.collection('zelappshashes').find(query).explain('executionStats');
-      return executionStats;
-    },
-
-    async dropAppHashIndex(name) {
-      const explorerDb = await db('explorer');
-      await explorerDb.collection('zelappshashes').dropIndex(name);
-    },
     // Where an app runs is a derivation over the app state event log, so seeding a
     // location means asserting the apprunning event the derivation reads. There is no
     // materialized row to write; writing one would seed a shape nothing consults.
@@ -931,7 +882,6 @@ export function dbClient(nodeNum) {
       const globalDb = await db('appsGlobal');
       await globalDb.collection('zelappslocation').updateOne({ name, ip }, { $set: { runningSince: new Date(runningSince) } });
     },
-
 
     async seedInstallingLocation({ name, ip, broadcastedAt }) {
       const globalDb = await db('appsGlobal');
