@@ -10,7 +10,6 @@ const daemonServiceUtils = require('../../ZelBack/src/services/daemonService/dae
 const chainUtilities = require('../../ZelBack/src/services/utils/chainUtilities');
 const { appPaymentPositions } = require('../../ZelBack/src/services/appPaymentPositions');
 const { backfillPaymentPositions, BACKFILL_BATCH } = require('../../ZelBack/src/services/migrations/paymentPositions');
-const decider = require('../../ZelBack/src/services/appDecisions/decider');
 const { stubMessages } = require('./fixtures/appRecords');
 
 chai.use(chaiAsPromised);
@@ -66,11 +65,9 @@ describe('app payment positions', () => {
 
   describe('backfillPaymentPositions', () => {
     let messages;
-    let paymentsChanged;
 
     beforeEach(() => {
       messages = stubMessages();
-      paymentsChanged = sinon.stub(decider, 'paymentsChanged').resolves([]);
     });
 
     function daemonAnswers(tip, deltas) {
@@ -92,7 +89,6 @@ describe('app payment positions', () => {
       sinon.assert.notCalled(executeCall);
       sinon.assert.notCalled(messages.setPositions);
       sinon.assert.notCalled(messages.markAllNotOnChain);
-      sinon.assert.notCalled(paymentsChanged);
     });
 
     it('writes the records in batches, each of at most BACKFILL_BATCH', async () => {
@@ -123,9 +119,6 @@ describe('app payment positions', () => {
       expect(written()).to.deep.equal([
         ['ha', { txIndex: 4, height: 694_900 }], ['hb', { txIndex: 1, height: 694_700 }], ['hgone', { notOnChain: true }],
       ]);
-      // A payment the chain does not hold has its name decided again, before any write.
-      sinon.assert.calledOnceWithExactly(paymentsChanged, ['hgone']);
-      sinon.assert.callOrder(paymentsChanged, messages.setPositions);
     });
 
     // A v8 node can hold a record written from a block that later left the chain:
@@ -140,9 +133,6 @@ describe('app payment positions', () => {
         positioned: 2, heightsCorrected: 1, notOnChain: 0, aboveTip: 0,
       });
       expect(written()).to.deep.equal([['ha', { txIndex: 3, height: 2_021_557 }], ['hb', { txIndex: 2, height: 2_020_000 }]]);
-      // A payment moved to the chain's height has its name decided again; one positioned where it was recorded does not.
-      sinon.assert.calledOnceWithExactly(paymentsChanged, ['ha']);
-      sinon.assert.callOrder(paymentsChanged, messages.setPositions);
     });
 
     it('leaves a record above the daemon\'s tip for a later run', async () => {

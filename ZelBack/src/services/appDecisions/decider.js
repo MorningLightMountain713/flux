@@ -333,10 +333,10 @@ function wakeAll() {
 
 /**
  * Decides again every name a change to these hashes' payments reaches. A
- * payment recorded in place of one the chain does not hold, moved to the
- * chain's height, found not on the chain, voided or given back moves its
- * message in its name's chain order, or out of it: every decision of the name
- * is removed, and a full pass decides the name again and rebuilds its row.
+ * payment recorded in place of one the chain does not hold, voided, or given
+ * back moves its message in its name's chain order, or out of it: every
+ * decision of the name is removed, and a full pass decides the name again and
+ * rebuilds its row.
  * Called by whatever changes a recorded payment, where no decider run can
  * interleave: under the chain-state lock, or before chain state is consistent.
  * @param {string[]} hashes
