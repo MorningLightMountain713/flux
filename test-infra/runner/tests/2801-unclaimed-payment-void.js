@@ -165,7 +165,7 @@ describe('Unclaimed payment void', function () {
     expect(res.data).to.equal(withheld.hash);
 
     await waitFor(
-      async () => (await db(1).getAppHash(withheld.hash))?.message === true,
+      async () => (await db(1).appHashRecord(withheld.hash))?.message === true,
       { timeout: 60000, label: 'the withheld contents reach a peer and are held beside the voided payment' },
     );
     await waitFor(async () => {
@@ -174,7 +174,7 @@ describe('Unclaimed payment void', function () {
     }, { timeout: 60000, interval: 2000, label: 'the withheld contents refused as unclaimed on a peer' });
 
     expect(await db(1).getPermanentMessage(claimed.hash), 'the claimed contents are stored on the same node').to.exist;
-    expect((await db(1).getAppHash(withheld.hash)).voided, 'the payment stays voided').to.equal(true);
+    expect((await db(1).appHashRecord(withheld.hash)).voided, 'the payment stays voided').to.equal(true);
     expect(await db(1).getGlobalApp(withheld.spec.name)).to.equal(null);
   });
 
