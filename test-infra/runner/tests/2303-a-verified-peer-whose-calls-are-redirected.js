@@ -4,7 +4,9 @@ import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
 import { pushImage } from '../framework/registry-helper.js';
 import { buildSeedableSyncthingApp } from '../framework/seed-helper.js';
-import { appDataRoot, clearOutboundRedirect, getAppContainerStatus, redirectOutbound } from '../framework/container.js';
+import {
+  appDataRoot, clearOutboundRedirect, componentIdentifier, getAppContainerStatus, redirectOutbound,
+} from '../framework/container.js';
 import { electMaster, clearMaster, resetFdm } from '../framework/fdm-control.js';
 import {
   waitFor, waitForReconcileActuated, waitForUp, waitForElectionDecisions, electionDecisionCount,
@@ -52,7 +54,7 @@ describe('a verified peer whose calls are redirected between the question and th
   dumpLogsOnFailure(() => env);
 
   const appName = `e2eproven${Date.now()}`;
-  const identifier = `${appName}_${appName}`;
+  let identifier;
   const addr = (i) => `${env.clients[i].ip}:16127`;
 
   // Sampled for the whole suite, not only where it waits: at most one node runs
@@ -84,6 +86,7 @@ describe('a verified peer whose calls are redirected between the question and th
     await resetFdm();
     await pushImage(appName, 'v1');
     const app = await buildSeedableSyncthingApp({ pinnedTo: [B, A], name: appName, syncMode: 'activeStandby' });
+    identifier = componentIdentifier(app);
 
     await electMaster(appName, env.clients[B].ip);
     const primaryAfter = env.clients[B].getLastEventId();

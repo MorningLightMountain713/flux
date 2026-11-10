@@ -3,7 +3,7 @@ import { describe, it, before, after } from 'mocha';
 import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
 import {
-  crashFluxos, execInContainer, isAppContainerRunning, releaseFluxos, requireAppContainerName, shutdownFluxosGracefully,
+  componentIdentifier, crashFluxos, execInContainer, isAppContainerRunning, releaseFluxos, requireAppContainerName, shutdownFluxosGracefully,
 } from '../framework/container.js';
 import { pushTestApp } from '../framework/registry-helper.js';
 import { buildSeedableApp } from '../framework/seed-helper.js';
@@ -49,6 +49,7 @@ describe('a surplus trim waits for a peer that is leaving', function () {
   dumpLogsOnFailure(() => env);
 
   const appName = `e2eswtrim${Date.now()}`;
+  let identifier;
   const folder = `flux${appName}_${appName}`;
   // The surplus holder's last event before the primary shut down.
   let shutdownFrom;
@@ -140,6 +141,7 @@ describe('a surplus trim waits for a peer that is leaving', function () {
         repoauth: '',
       }],
     });
+    identifier = componentIdentifier(app);
 
     await installOnNodes(env, app, [PRIMARY]);
     await waitForUp(client(PRIMARY), appName, 'the primary runs the app', { timeout: 300000, interval: 3000 });
@@ -180,7 +182,6 @@ describe('a surplus trim waits for a peer that is leaving', function () {
 
   it('trims the returning copy once no holder is leaving, and never stops the writer', async function () {
     this.timeout(900000);
-    const identifier = `${appName}_${appName}`;
     // Back within its announcement, the primary keeps the app: the surplus holder
     // never took it over.
     await releaseFluxos(client(PRIMARY).container);

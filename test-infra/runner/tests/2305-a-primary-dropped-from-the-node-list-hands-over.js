@@ -4,7 +4,7 @@ import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
 import { pushImage } from '../framework/registry-helper.js';
 import { buildSeedableSyncthingApp } from '../framework/seed-helper.js';
-import { appDataRoot, getAppContainerStatus } from '../framework/container.js';
+import { appDataRoot, componentIdentifier, getAppContainerStatus } from '../framework/container.js';
 import { electMaster, clearMaster, resetFdm } from '../framework/fdm-control.js';
 import { setNodeStatus, removeFromNodeList } from '../framework/daemon-control.js';
 import {
@@ -50,7 +50,7 @@ describe('a primary dropped from the node list hands its app over', function () 
   dumpLogsOnFailure(() => env);
 
   const appName = `e2edelisted${Date.now()}`;
-  const identifier = `${appName}_${appName}`;
+  let identifier;
   const addr = (i) => `${env.clients[i].ip}:16127`;
 
   // Sampled for the whole suite: at most one node runs the component.
@@ -82,6 +82,7 @@ describe('a primary dropped from the node list hands its app over', function () 
     await resetFdm();
     await pushImage(appName, 'v1');
     const app = await buildSeedableSyncthingApp({ pinnedTo: [B, A], name: appName, syncMode: 'activeStandby' });
+    identifier = componentIdentifier(app);
 
     await electMaster(appName, env.clients[B].ip);
     const primaryAfter = env.clients[B].getLastEventId();

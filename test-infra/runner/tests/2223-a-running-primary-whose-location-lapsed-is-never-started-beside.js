@@ -6,7 +6,7 @@ import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
 import { pushImage } from '../framework/registry-helper.js';
 import { buildSeedableSyncthingApp } from '../framework/seed-helper.js';
-import { appDataRoot, crashFluxos, getAppContainerStatus } from '../framework/container.js';
+import { appDataRoot, componentIdentifier, crashFluxos, getAppContainerStatus } from '../framework/container.js';
 import { electMaster, clearMaster, resetFdm } from '../framework/fdm-control.js';
 import {
   waitFor, waitForReconcileActuated, waitForUp, waitForElectionDecisions,
@@ -40,7 +40,7 @@ describe('a running primary whose location lapsed is never started beside', func
   let env;
   dumpLogsOnFailure(() => env);
   const appName = `e2elapse${Date.now()}`;
-  const identifier = `${appName}_${appName}`;
+  let identifier;
   const client = (i) => env.clients[i];
   const isUp = async (i) => {
     const status = await getAppContainerStatus(client(i).container, appName);
@@ -71,6 +71,7 @@ describe('a running primary whose location lapsed is never started beside', func
     await resetFdm();
     await pushImage(appName, 'v1');
     const app = await buildSeedableSyncthingApp({ pinnedTo: [B, A], name: appName, syncMode: 'activeStandby', instances: 2 });
+    identifier = componentIdentifier(app);
 
     await electMaster(appName, client(B).ip);
     const primaryAfter = client(B).getLastEventId();
