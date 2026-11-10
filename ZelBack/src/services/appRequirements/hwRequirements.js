@@ -146,10 +146,12 @@ async function targetsNameThisNode(spec) {
  *   this fit", but "is free, interruptible work the only reason it does not".
  *   Paid work asks it before giving up, because the honest answer to a shortfall
  *   a playground session is causing is to reclaim rather than to refuse.
+ * @param {string} [options.excludeApp] - an installed app whose resources are
+ *   not counted as committed: one a new specification of it replaces.
  * @returns {Promise<Object>} the node's free capacity
  */
 async function nodeCapacity(options = {}) {
-  const resourcesLocked = await resourceQueryService.appsResources();
+  const resourcesLocked = await resourceQueryService.appsResources({ excludeApp: options.excludeApp });
   if (resourcesLocked.status !== 'success') {
     throw new Error('Unable to obtain locked system resources by Flux Apps. Aborting.');
   }
@@ -252,14 +254,33 @@ async function checkCpuBurstHeadroom(deployment, options = {}) {
  *
  * Not for admitting NEW work - that is the install path's gate, which can and
  * does defer.
+ *
+ * `excludeApp` names the installed app the deployment replaces: its own
+ * resources, which the node's records still hold, are not counted against it.
  */
-async function checkNodeResourcesReclaiming(deployment) {
+async function checkNodeResourcesReclaiming(deployment, { excludeApp } = {}) {
   const totals = deployment.resourceTotals();
-  await checkNodeResources(deployment, { ignoreReclaimable: true });
+  await checkNodeResources(deployment, { ignoreReclaimable: true, excludeApp });
 
-  const shortfallIfHeld = capacityShortfall(await nodeCapacity(), totals);
+  const shortfallIfHeld = capacityShortfall(await nodeCapacity({ excludeApp }), totals);
   if (shortfallIfHeld) await admissionControl.requestReclaim(totals);
   return true;
+}
+
+/**
+ * Why the node cannot hold an installed app at a new specification, or null if
+ * it can. The app's own resources are left out of what the node has committed:
+ * the new specification replaces them. Reclaimable reservations count as free,
+ * as for checkNodeResourcesReclaiming.
+ * @param {string} appName - the installed app
+ * @param {object[]} deployments - its deployments on this node at the new specification
+ * @returns {Promise<string|null>}
+ */
+async function replacementShortfall(appName, deployments) {
+  const totals = deployments.map((deployment) => deployment.resourceTotals()).reduce((sum, t) => ({
+    cpu: sum.cpu + t.cpu, memoryMb: sum.memoryMb + t.memoryMb, hostDiskGb: sum.hostDiskGb + t.hostDiskGb,
+  }), { cpu: 0, memoryMb: 0, hostDiskGb: 0 });
+  return capacityShortfall(await nodeCapacity({ ignoreReclaimable: true, excludeApp: appName }), totals);
 }
 
 module.exports = {
@@ -268,6 +289,7 @@ module.exports = {
   targetsNameThisNode,
   checkNodeResources,
   checkNodeResourcesReclaiming,
+  replacementShortfall,
   checkCpuBurstHeadroom,
   nodeCapacity,
   capacityShortfall,

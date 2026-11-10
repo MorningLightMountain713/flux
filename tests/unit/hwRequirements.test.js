@@ -147,6 +147,8 @@ function buildHw(opts = {}) {
     collateral = { txhash: MY_TXHASH, txindex: 0 },
     operatorPubKey = MY_OPERATOR,
     isEnterpriseAppOwner = true,
+    // An installed app whose disk is committed unless a reading leaves it out.
+    replaced = null,
   } = opts;
 
   enterpriseNetworkStub = {
@@ -175,10 +177,14 @@ function buildHw(opts = {}) {
       getNodeSpecs: sinon.stub().resolves({ cpuCores: cpucores, ram, ssdStorage: ssd }),
     },
     '../appQuery/resourceQueryService': {
-      appsResources: sinon.stub().resolves({
+      appsResources: sinon.stub().callsFake(async ({ excludeApp } = {}) => ({
         status: resourcesStatus,
-        data: { appsCpusLocked, appsRamLocked, appsHddLocked },
-      }),
+        data: {
+          appsCpusLocked,
+          appsRamLocked,
+          appsHddLocked: appsHddLocked + (replaced && excludeApp !== replaced.name ? replaced.hdd : 0),
+        },
+      })),
     },
     '../../lib/log': { error: sinon.stub(), info: sinon.stub(), warn: sinon.stub() },
     config: asConfig({
@@ -708,6 +714,34 @@ describe('hwRequirements', () => {
     });
   });
 
+  // An installed app at a new specification. The node has 25 GB for apps
+  // (100 * 0.95 - 70); the app holds 12 (10 + 2 root fs) and its new
+  // specification asks for 20 (18 + 2): it fits alone, not beside the old one.
+  describe('an installed app at a new specification', () => {
+    const node = { ssd: 100, lockedHdd: 70, replaced: { name: 'myapp', hdd: 12 } };
+    const newSpec = () => deploymentOfSize({ cpu: 0.5, memory: 300, storageGb: 18 });
+
+    it('fits where its new specification fits alone', async () => {
+      const hw = buildHw(node);
+      const deployment = await newSpec();
+      expect(deployment.resourceTotals().hostDiskGb, 'the new specification, derived by the library').to.equal(20);
+      await rejectsWith(hw.checkNodeResources(deployment), 'Insufficient space');
+      expect(await hw.replacementShortfall('myapp', [deployment])).to.equal(null);
+      expect(await hw.checkNodeResourcesReclaiming(deployment, { excludeApp: 'myapp' })).to.equal(true);
+    });
+
+    it('does not fit where its new specifications on this node together do not', async () => {
+      const hw = buildHw(node);
+      const shortfall = await hw.replacementShortfall('myapp', [await newSpec(), await newSpec()]);
+      expect(shortfall).to.match(/Insufficient space/);
+    });
+
+    it('leaves out only the app it replaces', async () => {
+      const hw = buildHw(node);
+      expect(await hw.replacementShortfall('otherapp', [await newSpec()])).to.match(/Insufficient space/);
+    });
+  });
+
   // The fixtures above are the sizes and identities they are because the real
   // library refuses the ones this file used to carry. Asserted rather than
   // commented, so a fixture cannot quietly drift back.
@@ -745,6 +779,7 @@ describe('hwRequirements', () => {
       expect(hw.checkPlacement).to.be.a('function');
       expect(hw.checkNodeResources).to.be.a('function');
       expect(hw.checkNodeResourcesReclaiming).to.be.a('function');
+      expect(hw.replacementShortfall).to.be.a('function');
       expect(hw.checkCpuBurstHeadroom).to.be.a('function');
       expect(hw.systemArchitecture).to.be.a('function');
       expect(hw.nodeCapacity).to.be.a('function');

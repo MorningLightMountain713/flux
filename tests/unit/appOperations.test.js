@@ -1631,6 +1631,7 @@ describe('appOperations tests', () => {
       // the containers are gone, so a shortfall leaves a paid app destroyed and
       // free session capacity must never be what causes one.
       sinon.stub(hwRequirements, 'checkNodeResourcesReclaiming').resolves();
+      sinon.stub(hwRequirements, 'replacementShortfall').resolves(null);
       sinon.stub(appUninstaller, 'reclaimUnusedImages').resolves();
       uninstallComponentStub = sinon.stub(appUninstaller, 'uninstallComponent').resolves();
       denyPortsStub = sinon.stub(appUninstaller, 'denyPorts').resolves();
@@ -2068,6 +2069,50 @@ describe('appOperations tests', () => {
     // Nothing on a container says who owns its app, and the shutdown daemon
     // knows the app by its identity: a sale changes no component, so it
     // restarts nothing.
+    // A storage change on a node with room for the new specification alone.
+    describe('an update this node may not have room for', () => {
+      async function adoptUpdate(shortfall) {
+        setup();
+        hwRequirements.replacementShortfall.resolves(shortfall);
+        const oldDeployment = await makeDeployment({ hostPorts: [80], storage: 5 }, { identity: IDENTITY });
+        const newDeployment = await makeDeployment({ hostPorts: [80], storage: 10 }, { identity: IDENTITY });
+        deploymentProvider.planDeployment.resolves(newDeployment);
+        deploymentProvider.getInstalledDeployments.resolves([oldDeployment]);
+        deploymentProvider.planDeployments.resolves([newDeployment]);
+        sinon.stub(componentProvisioner, 'installComponent').resolves();
+        sinon.stub(fluxShutdowndClient, 'beginAppStop').resolves({ outcome: 'complete' });
+        sinon.stub(fluxShutdowndClient, 'upsertAppPlanBestEffort').resolves();
+        sinon.stub(fluxShutdowndClient, 'deleteAppPlanBestEffort').resolves();
+        sinon.stub(appReconciler, 'enqueueApp');
+        sinon.stub(componentKeyMap, 'namingForUpdate').resolves(namingOf(newDeployment));
+        const uninstallApplication = sinon.stub(appUninstaller, 'uninstallApplication').resolves();
+        const publish = sinon.spy(fluxEventBus, 'publish');
+        await appOperations.reconcileApp({ name: 'myapp', uuid: 'u-myapp', identity: IDENTITY }, registrySpec);
+        return { newDeployment, uninstallApplication, publish };
+      }
+
+      it('gives the app up and tells the network, touching nothing first, when it cannot hold the new specification', async () => {
+        const { newDeployment, uninstallApplication, publish } = await adoptUpdate('Insufficient space on Flux Node to spawn an application');
+
+        sinon.assert.calledOnceWithExactly(hwRequirements.replacementShortfall, 'myapp', [newDeployment]);
+        sinon.assert.calledOnceWithExactly(uninstallApplication, 'myapp', { broadcastRemoval: true });
+        sinon.assert.notCalled(uninstallComponentStub);
+        sinon.assert.notCalled(stubHostedInstances().updateRecord);
+        sinon.assert.calledWithExactly(publish, 'app:reconciled', {
+          name: 'myapp', hash: registrySpec.hash, outcome: 'removed', reason: 'Insufficient space on Flux Node to spawn an application',
+        });
+      });
+
+      it('replaces the component, and checks the node without the app it replaces, when it can', async () => {
+        const { uninstallApplication, publish } = await adoptUpdate(null);
+
+        sinon.assert.notCalled(uninstallApplication);
+        sinon.assert.calledOnce(uninstallComponentStub);
+        sinon.assert.calledWithExactly(hwRequirements.checkNodeResourcesReclaiming, sinon.match.any, { excludeApp: 'myapp' });
+        sinon.assert.calledWithExactly(publish, 'app:reconciled', { name: 'myapp', hash: registrySpec.hash, outcome: 'complete' });
+      });
+    });
+
     describe('an update that only names another owner', () => {
       const SELLER = '1SellerOfTheAppxxxxxxxxxxxxxxxxxxxx';
       let installComponent;

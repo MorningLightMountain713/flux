@@ -211,7 +211,7 @@ async function redeployComponent(appName, componentName, options = {}) {
       // eslint-disable-next-line no-await-in-loop
       const freshDeployment = await deploymentProvider.buildDeployment(install, { replica: deployComp.replica ?? null });
       // eslint-disable-next-line no-await-in-loop
-      await hwRequirements.checkNodeResourcesReclaiming(freshDeployment);
+      await hwRequirements.checkNodeResourcesReclaiming(freshDeployment, { excludeApp: appName });
 
       status(`Installing ${deployComp.identifier}...`);
       // eslint-disable-next-line no-await-in-loop
@@ -420,7 +420,7 @@ async function redeployApplication(appName, options = {}) {
         throw new Error(`Application ${appName} deployment not found after requirement check`);
       }
       // eslint-disable-next-line no-await-in-loop
-      await hwRequirements.checkNodeResourcesReclaiming(freshDeployment);
+      await hwRequirements.checkNodeResourcesReclaiming(freshDeployment, { excludeApp: appName });
 
       // Re-seed telemetry routing before recreating containers, in case the
       // redeploy carries a rotated sink (or dropped telemetry entirely).
@@ -2065,7 +2065,7 @@ async function reconcileComponents(appName, oldDeployment, newDeployment, regist
     }
   }
   const freshDeployment = await deploymentProvider.planDeployment(registrySpec, planned);
-  await hwRequirements.checkNodeResourcesReclaiming(freshDeployment);
+  await hwRequirements.checkNodeResourcesReclaiming(freshDeployment, { excludeApp: appName });
 
   // Re-seed telemetry routing from the updated spec. A sink change (key
   // rotation, added/dropped telemetry) can arrive with no component diff,
@@ -2197,6 +2197,21 @@ async function reconcileApp(installed, registrySpec) {
 
   if (operationRegistry.isHeld(installed.name)) {
     log.warn(`Skipping ${installed.name} — an operation is in progress for it`);
+    return;
+  }
+
+  // Decided before anything is touched: a node that cannot hold the app at its
+  // new specification gives the app up and tells the network, which places it on
+  // a node that can.
+  const replacing = newDeployments.filter((deployment) => oldDeployments
+    .some((old) => (old.replica ?? null) === (deployment.replica ?? null)));
+  const shortfall = await hwRequirements.replacementShortfall(installed.name, replacing);
+  if (shortfall) {
+    log.warn(`REMOVAL REASON: this node cannot hold ${installed.name} at its new specification - ${shortfall}`);
+    await appUninstaller.uninstallApplication(installed.name, { broadcastRemoval: true });
+    fluxEventBus.publish('app:reconciled', {
+      name: installed.name, hash: registrySpec.hash, outcome: 'removed', reason: shortfall,
+    });
     return;
   }
 
