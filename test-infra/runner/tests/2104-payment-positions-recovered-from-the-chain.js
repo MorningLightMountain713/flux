@@ -9,9 +9,6 @@ import { queueAppTx } from '../framework/daemon-control.js';
 import { dbClient } from '../framework/db-client.js';
 import { confirmTwoUpdatesInOneBlock } from '../framework/same-block-updates.js';
 import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
-import { createRequire } from 'node:module';
-
-const { UNPOSITIONED } = createRequire(import.meta.url)('../../../ZelBack/src/services/utils/unpositionedPayments.js');
 
 // A node's payment records carry each transaction's position in its block, as
 // the explorer meets them. A node whose records carry none - records made
@@ -82,7 +79,7 @@ describe('payment positions a node never recorded are recovered from the chain a
     await db.setAppHashHeight(hash, strayHeight);
     // The canary: the record and the message really are at the stray height before the restart.
     expect((await db.appHashRecord(hash)).height).to.equal(strayHeight);
-    expect((await db.permanentMessages({ hash }))[0].height).to.equal(strayHeight);
+    expect((await db.appMessages({ hash }))[0].height).to.equal(strayHeight);
 
     await restartFluxos(env.clients[NODE].container);
     await waitFor(async () => {
@@ -91,7 +88,7 @@ describe('payment positions a node never recorded are recovered from the chain a
     }, { timeout: 360000, interval: 3000, label: 'the node answering the app again' });
 
     expect((await db.appHashRecord(hash)).height).to.equal(chainHeight);
-    expect((await db.permanentMessages({ hash }))[0].height).to.equal(chainHeight);
+    expect((await db.appMessages({ hash }))[0].height).to.equal(chainHeight);
     const rows = await db.appSpecRows(name);
     expect(rows.map((row) => [row.hash, row.height])).to.deep.equal([[hash, chainHeight]]);
   });
@@ -112,7 +109,7 @@ describe('payment positions a node never recorded are recovered from the chain a
 
     const record = await db.appHashRecord(hash);
     expect(record.txid).to.not.equal(before.txid);
-    await waitFor(async () => (await db.permanentMessages({ hash }))[0].height === record.height,
+    await waitFor(async () => (await db.appMessages({ hash }))[0].height === record.height,
       { timeout: 120000, interval: 2000, label: 'the stored message at the new payment\'s height' });
     await waitFor(async () => {
       const rows = await db.appSpecRows(name);
@@ -121,25 +118,13 @@ describe('payment positions a node never recorded are recovered from the chain a
   });
 
   it('reads only the payment records without a position when it looks for ones to backfill', async () => {
-    const stamp = Date.now();
-    const placed = Array.from({ length: 50 }, (_, i) => `e2eplaced${stamp}${i}`);
-    const unplaced = `e2eunplaced${stamp}`;
-    try {
-      for (const hash of placed) {
-        // eslint-disable-next-line no-await-in-loop
-        await db.insertAppHashRecord({ hash, txid: hash, height: 1, txIndex: 0 });
-      }
-      await db.insertAppHashRecord({ hash: unplaced, txid: unplaced, height: 1 });
+    const { hash } = outcome.superseded;
+    await db.unsetTxIndex(hash);
 
-      const stats = await db.explainAppHashes(UNPOSITIONED);
+    const stats = await db.explainAppMessagesRead((messages) => messages.withoutPosition());
 
-      expect(stats.nReturned).to.be.at.least(1);
-      expect(stats.totalDocsExamined, 'the backfill read records that have a position').to.equal(stats.nReturned);
-    } finally {
-      for (const hash of [...placed, unplaced]) {
-        // eslint-disable-next-line no-await-in-loop
-        await db.deleteAppHash(hash);
-      }
-    }
+    // The canary: the read finds the record without a position.
+    expect(stats.nReturned).to.equal(1);
+    expect(stats.totalDocsExamined, 'the backfill read records that have a position').to.equal(stats.nReturned);
   });
 });

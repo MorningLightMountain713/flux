@@ -1,0 +1,16 @@
+[
+  {
+    "name": "no-index-on-positions",
+    "breaks": "the backfill reads only the payment records without a position, through the index on txIndex",
+    "edits": [
+      {
+        "file": "test-infra/flux-spec/dist/packages/spec-backend/src/domain/AppMessages.js",
+        "from": "    // a record without a position is indexed under null, so withoutPosition reads\n    // only those\n    { fields: ['txIndex'] },\n",
+        "to": ""
+      }
+    ],
+    "red": [
+      "reads only the payment records without a position when it looks for ones to backfill"
+    ]
+  }
+]

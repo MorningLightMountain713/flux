@@ -1,5 +1,7 @@
 import { MongoClient } from 'mongodb';
-import { REGISTRY_DERIVED_FIELDS } from '@runonflux/flux-spec-backend';
+import {
+  AppMessages, REGISTRY_DERIVED_FIELDS, StorageProvider, toMongoFilter,
+} from '@runonflux/flux-spec-backend';
 import { getSubnetConfig } from './subnet-config.js';
 
 const MONGO_URL = process.env.MONGO_URL || `mongodb://${getSubnetConfig().mongo}:27017`;
@@ -774,6 +776,25 @@ export function dbClient(nodeNum) {
     async appMessages(query = {}) {
       const col = await this.messages();
       return col.find(query, { projection: { _id: 0 } }).toArray();
+    },
+
+    // How mongod answers the query an AppMessages read sends, on this node's
+    // messages: `read(messages)` calls one AppMessages method, whose find is
+    // translated as the node's provider translates it and explained.
+    async explainAppMessagesRead(read) {
+      let asked = null;
+      class RecordingProvider extends StorageProvider {
+        // eslint-disable-next-line class-methods-use-this
+        async find(store, query) {
+          asked = { store, query };
+          return [];
+        }
+      }
+      await read(new AppMessages(new RecordingProvider()));
+      if (asked?.store !== AppMessages.STORE) throw new Error(`explainAppMessagesRead: the read sent no find to ${AppMessages.STORE}`);
+      const col = await this.messages();
+      const { executionStats } = await col.find(toMongoFilter(asked.query)).explain('executionStats');
+      return executionStats;
     },
 
     async permanentMessages(query = {}) {
