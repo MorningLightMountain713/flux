@@ -112,7 +112,7 @@ describe('MongoStorageProvider', () => {
   });
 
   it('refuses a condition that mixes an operator with another key', async () => {
-    expect(() => MongoStorageProvider.toFilter({ n: { gt: 1, regex: 'x' } })).to.throw(/mixes operators/);
+    await expect(provider.find(STORE, { n: { gt: 1, regex: 'x' } })).to.be.rejectedWith(/mixes operators/);
   });
 
   it('replaces the record a query names, adding it on upsert alone', async () => {

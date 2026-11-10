@@ -7,80 +7,9 @@ const specLibrary = require('../utils/specLibrary');
  * flux-spec's StorageProvider over this node's MongoDB. Each logical store is a
  * collection of one of the node's databases, every query in the port's language
  * is one Mongo filter, and a record is returned without the document id.
- *
- * The port compares an absent field with nothing: `{ f: null }` holds only for
- * a field present and null, `{ f: { ne: null } }` for a field absent or not
- * null, `{ f: { in: [null, ...] } }` for one present and listed. Mongo reads an
- * absent field as null in each of those, so they are translated to filters that
- * answer as the port does. A path through an array of objects is not a port
- * query: the port reads no further than the array.
+ * Queries and changes are translated by flux-spec (`toMongoFilter`,
+ * `toMongoUpdate`).
  */
-
-const OPERATORS = new Set(['in', 'ne', 'exists', 'gt', 'gte', 'lt', 'lte']);
-
-const PRESENT_AND_NULL = { $type: 'null' };
-
-// A filter no stored document satisfies: every stored document has an id.
-const NOTHING = { _id: { $exists: false } };
-
-function isOperatorObject(condition) {
-  if (condition === null || typeof condition !== 'object' || Array.isArray(condition)) return false;
-  const keys = Object.keys(condition);
-  const operators = keys.filter((key) => OPERATORS.has(key));
-  if (operators.length && operators.length !== keys.length) {
-    throw new Error(`MongoStorageProvider: a condition mixes operators with ${keys.filter((k) => !OPERATORS.has(k)).join(', ')}`);
-  }
-  return operators.length > 0;
-}
-
-function clausesFor(field, condition) {
-  if (!isOperatorObject(condition)) {
-    return [{ [field]: condition === null ? PRESENT_AND_NULL : condition }];
-  }
-  return Object.entries(condition).map(([op, operand]) => {
-    switch (op) {
-      case 'in': {
-        const values = operand.filter((value) => value !== null);
-        if (values.length === operand.length) return { [field]: { $in: values } };
-        return { $or: [{ [field]: { $in: values } }, { [field]: PRESENT_AND_NULL }] };
-      }
-      case 'ne':
-        return { [field]: operand === null ? { $not: PRESENT_AND_NULL } : { $ne: operand } };
-      case 'exists':
-        return { [field]: { $exists: operand } };
-      default:
-        return { [field]: { [`$${op}`]: operand } };
-    }
-  });
-}
-
-/**
- * The Mongo filter a port query states.
- * @param {Object} [query]
- * @returns {Object}
- */
-function toFilter(query = {}) {
-  const clauses = [];
-  for (const [field, condition] of Object.entries(query)) {
-    if (field === 'or') clauses.push(condition.length ? { $or: condition.map(toFilter) } : NOTHING);
-    else clauses.push(...clausesFor(field, condition));
-  }
-  if (clauses.length === 0) return {};
-  if (clauses.length === 1) return clauses[0];
-  return { $and: clauses };
-}
-
-/**
- * The Mongo update a port change states, or null when it sets and unsets nothing.
- * @param {{ set?: Object<string, *>, unset?: string[] }} change
- * @returns {Object|null}
- */
-function toUpdate({ set = {}, unset = [] } = {}) {
-  const update = {};
-  if (Object.keys(set).length) update.$set = set;
-  if (unset.length) update.$unset = Object.fromEntries(unset.map((field) => [field, '']));
-  return Object.keys(update).length ? update : null;
-}
 
 function projectionFor(fields) {
   const projection = { _id: 0 };
@@ -92,7 +21,7 @@ let Provider = null;
 
 function providerClass() {
   if (Provider) return Provider;
-  const { StorageProvider } = specLibrary.loaded();
+  const { StorageProvider, toMongoFilter: toFilter, toMongoUpdate: toUpdate } = specLibrary.loaded();
 
   Provider = class MongoStorageProvider extends StorageProvider {
     #stores;
@@ -195,4 +124,4 @@ function create(stores) {
   return new ProviderClass(stores);
 }
 
-module.exports = { create, toFilter };
+module.exports = { create };
