@@ -10,10 +10,10 @@ import { confirmTwoUpdatesInOneBlock } from '../framework/same-block-updates.js'
 import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 
 // When an owner's two updates to an app land in one block, every node holds the
-// one the owner signed last, and so does a node that has just restarted and
-// rebuilt its registry from the permanent messages. The update signed last sits
-// first in the block and is promoted first, so position in the block or
-// promotion order standing in for the owner's order shows.
+// one later in the block, and so does a node that has just restarted and decided
+// the app again from its stored messages. The update later in the block was
+// signed first, so a node ordering by signed time or by the order it received
+// the messages shows.
 
 const NODES = 4;
 const RESTARTED = 1;
@@ -43,7 +43,7 @@ describe('an app\'s updates in one block leave every node holding the same spec'
     await env?.teardown();
   });
 
-  it('every node holds the update signed last, though it sits first in the block', async () => {
+  it('every node holds the update later in the block, though it was signed first', async () => {
     const held = [];
     for (let i = 0; i < NODES; i += 1) held.push(await heldBy(i)); // eslint-disable-line no-await-in-loop
     expect(held).to.deep.equal(Array(NODES).fill(outcome.standing.description));

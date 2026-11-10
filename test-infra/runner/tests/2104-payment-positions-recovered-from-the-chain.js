@@ -44,8 +44,8 @@ describe('payment positions a node never recorded are recovered from the chain a
   });
 
   it('records each payment\'s position in its block as the explorer meets it', async () => {
-    expect((await db.appHashRecord(outcome.standing.hash)).txIndex).to.equal(0);
-    expect((await db.appHashRecord(outcome.superseded.hash)).txIndex).to.equal(1);
+    expect((await db.appHashRecord(outcome.standing.hash)).txIndex).to.equal(1);
+    expect((await db.appHashRecord(outcome.superseded.hash)).txIndex).to.equal(0);
   });
 
   it('after losing those positions and restarting, has the positions back and holds the same spec', async function () {

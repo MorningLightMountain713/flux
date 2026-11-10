@@ -1,9 +1,10 @@
 // Two updates to one app confirmed in the same block, with the update signed
 // last placed FIRST in the block.
 //
-// An owner's own messages stand in the order the owner signed them, wherever
-// the miner placed them: only a node that orders them by their signatures'
-// timestamps holds the update signed last.
+// Messages are decided in chain order: the update later in the block replaces
+// the earlier one and stands, whatever order they were signed in. A node that
+// orders them by their signatures' timestamps, or by the order it received
+// them, holds the other one.
 
 import { expect } from 'chai';
 import { nodeKey } from './keys.js';
@@ -18,9 +19,9 @@ import { waitFor } from './wait.js';
  * @param {object} env Test environment
  * @param {string} name App name
  * @returns {Promise<{standing: {hash: string, description: string},
- *   superseded: {hash: string, description: string}}>} the update signed last,
- *   at block position 0 (the one that must stand), and the update signed first,
- *   at position 1
+ *   superseded: {hash: string, description: string}}>} the update signed first,
+ *   at block position 1 (the one that must stand), and the update signed last,
+ *   at position 0
  */
 export async function confirmTwoUpdatesInOneBlock(env, name) {
   const registered = await registerAndConfirm(env.clients[0].url, nodeKey(1), buildAppSpec({ name }), env.clients);
@@ -61,5 +62,5 @@ export async function confirmTwoUpdatesInOneBlock(env, name) {
     return all.every(Boolean);
   }, { timeout: 180000, interval: 3000, label: 'both updates promoted on every node' });
 
-  return { standing: signedLast, superseded: signedFirst };
+  return { standing: signedFirst, superseded: signedLast };
 }

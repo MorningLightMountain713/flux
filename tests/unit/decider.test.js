@@ -170,6 +170,30 @@ describe('decider', function () {
     expect(await verdict('u')).to.equal('applied');
   });
 
+  it('stands on the update later in its block, whatever order the two were signed in', async () => {
+    // One block: the update keeping OWNER at position 0, signed after the
+    // transfer to BUYER at position 1. The transfer stands, so BUYER's later
+    // update is BUYER's to sign.
+    await store({ hash: 'r', height: 100 });
+    await store({
+      hash: 'keep', type: 'fluxappupdate', height: 200, txIndex: 0, timestamp: 200_900,
+    });
+    await store({
+      hash: 'toBuyer', type: 'fluxappupdate', height: 200, txIndex: 1, owner: BUYER, signer: OWNER, timestamp: 200_100,
+    });
+    await store({
+      hash: 'byBuyer', type: 'fluxappupdate', height: 300, owner: BUYER, signer: BUYER,
+    });
+    const decider = loadDecider();
+
+    decider.wakeAll();
+    await decider.idle();
+
+    expect(await verdict('keep')).to.equal('applied');
+    expect(await verdict('toBuyer')).to.equal('applied');
+    expect(await verdict('byBuyer')).to.equal('applied');
+  });
+
   it('decides a name again from a late message earlier in chain order', async () => {
     // The transfer to BUYER arrives after the update BUYER signed: first the
     // update is unauthorized, then the transfer turns it applied.
