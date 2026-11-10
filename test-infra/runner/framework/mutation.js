@@ -97,7 +97,8 @@ export function tapResults(tap) {
 /**
  * Whether a run failed exactly the declared tests. A TAP title is the describe
  * title, a space, then the it() title, so a declared title matches the one
- * result it ends.
+ * result it is, or ends after a space: an it() title alone, or with as much of
+ * its describe title as tells two tests of one name apart.
  * @param {Array<{ok:boolean, title:string}>} results
  * @param {string[]} red - the it() titles expected to fail; empty for a control
  * @returns {{ok:boolean, failed:string[], reasons:string[]}}
@@ -108,7 +109,7 @@ export function judgeRun(results, red) {
   const reasons = [];
   const declared = new Set();
   for (const title of red) {
-    const matches = results.filter((r) => r.title.endsWith(` ${title}`));
+    const matches = results.filter((r) => r.title === title || r.title.endsWith(` ${title}`));
     if (matches.length !== 1) {
       reasons.push(`"${title}" names ${matches.length} tests of the run`);
       continue;

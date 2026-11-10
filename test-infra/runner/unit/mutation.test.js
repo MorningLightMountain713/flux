@@ -128,6 +128,12 @@ describe('judgeRun', () => {
       'failed, not declared red: a file sold "before all" hook for "retires the file"',
     ]);
   });
+  it('meets a declaration naming a test by its full title, or by its describe title and its own', () => {
+    const twice = [{ ok: false, title: 'x y retires the file' }, { ok: true, title: 'z y retires the file' }];
+    assert.deepEqual(judgeRun(twice, ['x y retires the file']).reasons, []);
+    assert.deepEqual(judgeRun(twice, ['x y retires the file']).failed, ['x y retires the file']);
+    assert.match(judgeRun(twice, ['y retires the file']).reasons[0], /names 2 tests/);
+  });
   it('fails a declared title that names two tests', () => {
     const twice = [{ ok: false, title: 'x retires the file' }, { ok: false, title: 'y retires the file' }];
     assert.match(judgeRun(twice, ['retires the file']).reasons[0], /names 2 tests/);
