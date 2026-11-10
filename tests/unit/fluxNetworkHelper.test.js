@@ -97,6 +97,23 @@ describe('fluxNetworkHelper tests', () => {
       sinon.restore();
     });
 
+    // The asking node checks which address the call to its /flux/version came from.
+    it('sends the asking node\'s nonce with the call to its /flux/version, and no malformed one', async () => {
+      const nonce = 'a1'.repeat(16);
+      stub = sinon.stub(serviceHelper, 'axiosGet').resolves(fluxAvailabilitySuccessResponse);
+      sinon.stub(fluxCommunicationUtils, 'socketAddressInFluxList').resolves(true);
+      sinon.stub(net.Socket.prototype, 'connect').callsFake((_port, _ip, callback) => {
+        callback();
+      });
+
+      await fluxNetworkHelper.checkFluxAvailability({ params: { ip: '127.0.0.1', port: '16127' }, query: { nonce } }, generateResponse());
+      sinon.assert.calledWithExactly(stub, `http://127.0.0.1:16127/flux/version?availabilityNonce=${nonce}`, axiosConfig);
+
+      stub.resetHistory();
+      await fluxNetworkHelper.checkFluxAvailability({ params: { ip: '127.0.0.1', port: '16127' }, query: { nonce: 'x&a=1' } }, generateResponse());
+      sinon.assert.calledWithExactly(stub, 'http://127.0.0.1:16127/flux/version', axiosConfig);
+    });
+
     it('Should return success message if proper parameters are passed in params', async () => {
       const mockResponse = generateResponse();
       const req = {

@@ -19,6 +19,7 @@ const playgroundEgress = require('./appPlayground/playgroundEgress');
 const fluxCommunicationUtils = require('./fluxCommunicationUtils');
 const { peerManager } = require('./utils/peerState');
 const { CLOSE_CODES, DIRECTION } = require('./utils/FluxPeerSocket');
+const availabilitySourceTest = require('./utils/availabilitySourceTest');
 const fluxEventBus = require('./utils/fluxEventBus');
 const nodeDosState = require('./nodeDosState');
 const { NON_PUBLIC_IPV4 } = require('./utils/nonPublicNetworks');
@@ -469,9 +470,11 @@ function isNotListedAnswer(answer) {
  * API on the minimum FluxOS version, its UI and its syncthing port up.
  * @param {string} ip IP address.
  * @param {string} port Port. Defaults to config.server.apiport.
+ * @param {{nonce?: string}} [options] - the asking node's nonce, sent with the call
+ *   to its /flux/version so it can see which address the call came from
  * @returns {Promise<string>} One of FluxAvailability.
  */
-async function fluxAvailability(ip, port = config.get('server.apiport')) {
+async function fluxAvailability(ip, port = config.get('server.apiport'), { nonce } = {}) {
   const axiosConfig = {
     timeout: 5000,
   };
@@ -489,7 +492,8 @@ async function fluxAvailability(ip, port = config.get('server.apiport')) {
     if (!isConfirmedNode) {
       return FluxAvailability.NOT_LISTED;
     }
-    const fluxResponse = await serviceHelper.axiosGet(`http://${ip}:${port}/flux/version`, axiosConfig);
+    const versionQuery = availabilitySourceTest.isNonce(nonce) ? `?availabilityNonce=${nonce}` : '';
+    const fluxResponse = await serviceHelper.axiosGet(`http://${ip}:${port}/flux/version${versionQuery}`, axiosConfig);
     if (fluxResponse.data.status !== 'success') return FluxAvailability.UNAVAILABLE;
 
     const fluxVersion = fluxResponse.data.data;
@@ -540,7 +544,7 @@ async function checkFluxAvailability(req, res) {
     return res.json(errMessage);
   }
 
-  const availability = await fluxAvailability(ip, port);
+  const availability = await fluxAvailability(ip, port, { nonce: req.query.nonce });
 
   let message;
 

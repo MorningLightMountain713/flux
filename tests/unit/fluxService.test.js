@@ -15,6 +15,7 @@ const chaiAsPromised = require('chai-as-promised');
 
 chai.use(chaiAsPromised);
 const { expect } = chai;
+const availabilitySourceTest = require('../../ZelBack/src/services/utils/availabilitySourceTest');
 
 const geolocationService = require('../../ZelBack/src/services/geolocationService');
 const sinon = require('sinon');
@@ -1399,6 +1400,12 @@ describe('fluxService tests', () => {
       fluxService.getFluxVersionAPI({}, res);
 
       sinon.assert.calledOnceWithExactly(res.json, expectedResponse);
+    });
+
+    it('records the address an availability observer\'s call came from, by its nonce', async () => {
+      const nonce = availabilitySourceTest.open('1.2.3.4');
+      fluxService.getFluxVersionAPI({ query: { availabilityNonce: nonce }, socket: { remoteAddress: '::ffff:10.0.0.1' } }, generateResponse());
+      expect(availabilitySourceTest.close(nonce)).to.deep.equal({ verdict: 'mismatch', seenFrom: '10.0.0.1' });
     });
   });
 

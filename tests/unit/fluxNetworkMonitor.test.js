@@ -20,6 +20,7 @@ const nodeDosState = require('../../ZelBack/src/services/nodeDosState');
 const appUninstaller = require('../../ZelBack/src/services/appLifecycle/appUninstaller');
 const { requireMongo } = require('./dbTestHelper');
 const log = require('../../ZelBack/src/lib/log');
+const availabilitySourceTest = require('../../ZelBack/src/services/utils/availabilitySourceTest');
 
 chai.use(chaiAsPromised);
 
@@ -139,6 +140,47 @@ describe('fluxNetworkMonitor tests', () => {
       const result = await fluxNetworkMonitor.checkMyFluxAvailability();
 
       expect(result).to.be.true;
+    });
+
+    // The observer's call to this node carries the ask's nonce; the address it came
+    // from is checked against the observer's own.
+    describe('the source of the observer\'s call', () => {
+      const answered = (from) => sinon.stub(serviceHelper, 'axiosGet').callsFake(async (url) => {
+        const nonce = new URL(url).searchParams.get('nonce');
+        if (from) availabilitySourceTest.record(nonce, from);
+        return { data: { status: 'success', data: { message: 'all is good!' } } };
+      });
+
+      it('asks each observer with a nonce of its own', async () => {
+        getRandomExternalObserver.resolves('1.2.3.4:16127');
+        const axiosGet = answered('1.2.3.4');
+        await fluxNetworkMonitor.checkMyFluxAvailability();
+        const [url] = axiosGet.firstCall.args;
+        expect(new URL(url).searchParams.get('nonce')).to.match(/^[0-9a-f]{32}$/);
+      });
+
+      it('holds a node every observer reaches from an address other than its own, and says why', async () => {
+        getRandomExternalObserver.resolves('1.2.3.4:16127');
+        answered('10.9.9.9');
+
+        const result = await fluxNetworkMonitor.checkMyFluxAvailability();
+
+        expect(result).to.equal(false);
+        expect(nodeDosState.getRawDosMessage()).to.equal(nodeDosState.SOURCE_NAT_MESSAGE);
+      });
+
+      it('takes a call from the observer\'s own address as no evidence', async () => {
+        getRandomExternalObserver.resolves('1.2.3.4:16127');
+        answered('::ffff:1.2.3.4');
+        expect(await fluxNetworkMonitor.checkMyFluxAvailability()).to.equal(true);
+      });
+
+      it('takes an observer that sent no nonce as no evidence', async () => {
+        getRandomExternalObserver.resolves('1.2.3.4:16127');
+        answered(null);
+        expect(await fluxNetworkMonitor.checkMyFluxAvailability()).to.equal(true);
+        expect(nodeDosState.getRawDosMessage()).to.not.equal(nodeDosState.SOURCE_NAT_MESSAGE);
+      });
     });
 
     it('a node reachable from outside but short of peers past the DOS threshold is held, with the shortfall as the reason', async () => {

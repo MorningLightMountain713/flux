@@ -68,6 +68,7 @@ const resourceQueryService = require('./appQuery/resourceQueryService');
 const appQueryService = require('./appQuery/appQueryService');
 const containerLabelBackfill = require('./appLifecycle/containerLabelBackfill');
 const registryManager = require('./appDatabase/registryManager');
+const availabilitySourceTest = require('./utils/availabilitySourceTest');
 
 /**
  * What an endpoint that updates FluxOS's own code answers on this node type, or
@@ -1005,6 +1006,9 @@ function getFluxVersion() {
  * @param {import('express').Response} res
  */
 function getFluxVersionAPI(req, res) {
+  // An observer this node asked to reach it calls here with the ask's nonce.
+  const nonce = req.query?.availabilityNonce;
+  if (availabilitySourceTest.isNonce(nonce)) availabilitySourceTest.record(nonce, req.socket?.remoteAddress);
   res.json(messageHelper.createDataMessage(getFluxVersion()));
 }
 

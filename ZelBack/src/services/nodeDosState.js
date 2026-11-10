@@ -21,7 +21,8 @@ let dosMessage = null;
 const UNREACHABLE_MESSAGE = 'Flux communication is limited, other nodes on the network cannot reach yours through API calls';
 const UNAVAILABLE_MESSAGE = 'Flux is not available for outside communication';
 const BENCH_PUBLIC_IP_MESSAGE = 'Error getting publicIp from FluxBench';
-const REACHABILITY_MESSAGES = [UNREACHABLE_MESSAGE, UNAVAILABLE_MESSAGE, BENCH_PUBLIC_IP_MESSAGE];
+const SOURCE_NAT_MESSAGE = 'Flux connections reach this node from an address other than their own: its inbound connections are source-NATed';
+const REACHABILITY_MESSAGES = [UNREACHABLE_MESSAGE, UNAVAILABLE_MESSAGE, BENCH_PUBLIC_IP_MESSAGE, SOURCE_NAT_MESSAGE];
 // Set while this node knows no address of its own, and ended when it learns one.
 const IP_DETECTION_FAILED_MESSAGE = 'Flux IP detection failed';
 
@@ -337,6 +338,7 @@ module.exports = {
   UNREACHABLE_MESSAGE,
   UNAVAILABLE_MESSAGE,
   BENCH_PUBLIC_IP_MESSAGE,
+  SOURCE_NAT_MESSAGE,
   IP_DETECTION_FAILED_MESSAGE,
   releaseDosOwnedBy,
   countUnreachable,

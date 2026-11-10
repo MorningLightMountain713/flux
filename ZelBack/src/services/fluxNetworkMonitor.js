@@ -25,6 +25,7 @@ const {
 const appUninstaller = require('./appLifecycle/appUninstaller');
 const registryManager = require('./appDatabase/registryManager');
 const appRecords = require('./appDatabase/appRecords');
+const availabilitySourceTest = require('./utils/availabilitySourceTest');
 
 // IP-change monitoring state.
 const IP_CHANGE_WINDOW_MS = 20 * 60 * 60 * 1000;
@@ -603,8 +604,11 @@ async function checkMyFluxAvailability(retryNumber = 0) {
   const localIp = extractIp(fluxNetworkHelper.getCachedLocalSocketAddress());
   const localApiPort = extractPort(fluxNetworkHelper.getCachedLocalSocketAddress());
 
+  // The observer calls this node with the nonce, so the address its call arrives
+  // from can be checked against the observer's own (availabilitySourceTest).
+  const nonce = availabilitySourceTest.open(remoteIp);
   const url = `http://${remoteIp}:${remotePort}/flux/`
-    + `checkfluxavailability?ip=${localIp}&port=${localApiPort}`;
+    + `checkfluxavailability?ip=${localIp}&port=${localApiPort}&nonce=${nonce}`;
 
   const resMyAvailability = await serviceHelper.axiosGet(url, axiosConfig).catch(
     (error) => {
@@ -614,6 +618,7 @@ async function checkMyFluxAvailability(retryNumber = 0) {
       return null;
     },
   );
+  const source = availabilitySourceTest.close(nonce);
 
   // The observer does not list this address yet - typically a move it has not seen
   // confirmed - so it has not looked. Like having nobody to ask: nothing is
@@ -678,6 +683,21 @@ async function checkMyFluxAvailability(retryNumber = 0) {
       const newRetryIndex = retryNumber + 1;
       return checkMyFluxAvailability(newRetryIndex);
     }
+    return false;
+  }
+  // Reached, but from an address that is not the observer's: something rewrites
+  // the sources of this node's inbound connections, or the observer's egress is
+  // not its listed address. Counted as a failed ask, so only several observers
+  // agreeing hold the node.
+  if (source.verdict === 'mismatch') {
+    log.error(`checkMyFluxAvailability - ${remoteIp}:${remotePort} reached this node from ${source.seenFrom}`);
+    nodeDosState.countUnreachable(2);
+    if (nodeDosState.effectiveDosState() > 10) {
+      nodeDosState.holdAvailabilityDos(nodeDosState.SOURCE_NAT_MESSAGE);
+      log.error(nodeDosState.getRawDosMessage());
+      return false;
+    }
+    if (retryNumber <= 6) return checkMyFluxAvailability(retryNumber + 1);
     return false;
   }
   const measuredUptime = fluxNetworkHelper.fluxUptime();
