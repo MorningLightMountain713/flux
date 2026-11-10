@@ -111,7 +111,7 @@ describe('an app volume uses direct I/O', function () {
     const beforeUpdate = holder.getLastEventId();
     await seedSpecUpdate(env, updated, [0]);
     await stopTicker();
-    const replaced = () => waitForComponentRedeployed(holder, appName, appName, false, 0, { afterId: beforeUpdate })
+    const replaced = () => waitForComponentRedeployed(holder, appName, appName, true, 0, { afterId: beforeUpdate })
       .then(() => true, () => false);
     await driveUntil(holder, replaced, { blocks: 108, label: 'the node reinstalls the app at its new specification' });
 
