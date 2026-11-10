@@ -2,7 +2,7 @@
 import { describe, it, before, after } from 'mocha';
 import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
-import { execInContainer, crashFluxos, releaseFluxos } from '../framework/container.js';
+import { crashFluxos, execInContainer, releaseFluxos, requireAppContainerName } from '../framework/container.js';
 import { pushTestApp } from '../framework/registry-helper.js';
 import { buildSeedableApp } from '../framework/seed-helper.js';
 import { bootAndPeer, installOnNodes, electionIndexOf } from '../framework/reconciler-suite.js';
@@ -112,7 +112,7 @@ describe('an owner stop and start keeps every g: component on the primary', func
     // takes the app over; then it comes back, as a standby still ranked ahead of
     // the primary.
     await crashFluxos(client(FIRST).container, { hold: true });
-    await Promise.all(COMPONENTS.map((name) => execInContainer(client(FIRST).container, `docker kill ${folderOf(name)}`)));
+    await Promise.all(COMPONENTS.map((name) => requireAppContainerName(client(FIRST).container, appName, name).then((name) => execInContainer(client(FIRST).container, `docker kill ${name}`))));
     await stopDaemon(client(FIRST));
     await waitHolding(async () => {
       const running = await oneHolderAtMost();

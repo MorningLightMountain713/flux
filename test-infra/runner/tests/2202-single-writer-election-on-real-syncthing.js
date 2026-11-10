@@ -3,8 +3,7 @@ import { describe, it, before, after } from 'mocha';
 import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
 import {
-  appContainerName, componentIdentifier, execInContainer, isAppContainerRunning, blockPeerAccess, unblockPeerAccess,
-  blockTraffic, unblockTraffic, crashFluxos, legacyFolderId, releaseFluxos,
+  blockPeerAccess, blockTraffic, componentIdentifier, crashFluxos, execInContainer, isAppContainerRunning, legacyFolderId, releaseFluxos, requireAppContainerName, unblockPeerAccess, unblockTraffic,
 } from '../framework/container.js';
 import { pushTestApp } from '../framework/registry-helper.js';
 import { buildSeedableApp } from '../framework/seed-helper.js';
@@ -172,7 +171,7 @@ describe('single-writer election on real syncthing', function () {
   it('replaces a primary that dies with the standby that was connected to it', async function () {
     this.timeout(420000);
     // The whole machine: the process, the container and the daemon.
-    const container = await appContainerName(client(FIRST).container, appName);
+    const container = await requireAppContainerName(client(FIRST).container, appName);
     await crashFluxos(client(FIRST).container, { hold: true });
     await execInContainer(client(FIRST).container, `docker kill ${container}`);
     await stopDaemon(client(FIRST));

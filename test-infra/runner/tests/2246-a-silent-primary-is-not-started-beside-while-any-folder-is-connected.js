@@ -2,7 +2,7 @@
 import { describe, it, before, after } from 'mocha';
 import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
-import { execInContainer, crashFluxos, releaseFluxos } from '../framework/container.js';
+import { crashFluxos, execInContainer, releaseFluxos, requireAppContainerName } from '../framework/container.js';
 import { pushTestApp } from '../framework/registry-helper.js';
 import { buildSeedableApp } from '../framework/seed-helper.js';
 import { bootAndPeer, installOnNodes } from '../framework/reconciler-suite.js';
@@ -108,7 +108,7 @@ describe('a silent primary is not started beside while any of its folders is con
   it('takes the app over once the primary\'s whole machine is down', async function () {
     this.timeout(600000);
     const gone = await silenceVerdicts('gone');
-    await Promise.all(COMPONENTS.map((name) => execInContainer(client(PRIMARY).container, `docker kill ${folderOf(name)}`)));
+    await Promise.all(COMPONENTS.map((name) => requireAppContainerName(client(PRIMARY).container, appName, name).then((name) => execInContainer(client(PRIMARY).container, `docker kill ${name}`))));
     await stopDaemon(client(PRIMARY));
 
     await waitHolding(async () => (await oneHolderAtMost())[STANDBY].length === COMPONENTS.length, {

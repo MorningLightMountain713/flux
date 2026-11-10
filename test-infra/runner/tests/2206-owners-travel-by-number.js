@@ -2,7 +2,7 @@ import { describe, it, before, after } from 'mocha';
 import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
 import {
-  componentIdentifier, crashFluxos, execInContainer, isAppContainerRunning, legacyFolderId, releaseFluxos,
+  componentIdentifier, crashFluxos, execInContainer, isAppContainerRunning, legacyFolderId, releaseFluxos, requireAppContainerName,
 } from '../framework/container.js';
 import { pushTestApp } from '../framework/registry-helper.js';
 import { buildSeedableApp } from '../framework/seed-helper.js';
@@ -344,8 +344,9 @@ describe('owners travel by number on real syncthing', function () {
     expect(await statPath(client(ARCANE), `${data}/${OWNED_FILE}`), 'fixture: the file the app rewrites on start')
       .to.deep.equal({ uid: APP_UID, gid: APP_GID, mode: '600' });
 
+    const primaryContainer = await requireAppContainerName(client(PRIMARY).container, appName);
     await crashFluxos(client(PRIMARY).container, { hold: true });
-    await sh(PRIMARY, `docker kill ${folder}`);
+    await sh(PRIMARY, `docker kill ${primaryContainer}`);
     await stopDaemon(client(PRIMARY));
 
     await waitHolding(async () => {
@@ -353,7 +354,7 @@ describe('owners travel by number on real syncthing', function () {
       expect(running.length, `more than one node runs the component: ${running.join(', ')}`).to.be.at.most(1);
       return running.includes(ARCANE);
     }, { timeout: 420000, interval: 3000, label: 'the Arcane standby takes over and runs the app' });
-    const logs = (await sh(ARCANE, `docker logs ${folder} 2>&1; true`)).stdout;
+    const logs = (await sh(ARCANE, `docker logs ${await requireAppContainerName(client(ARCANE).container, appName)} 2>&1; true`)).stdout;
     expect(logs, 'the app rewrote its own file on the new primary').to.include(`write file ok: /appdata/${OWNED_FILE} (uid ${APP_UID})`);
   });
 

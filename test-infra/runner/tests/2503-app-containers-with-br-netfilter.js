@@ -14,7 +14,7 @@ import { execFileSync } from 'node:child_process';
 import { describe, it, before, after } from 'mocha';
 import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
-import { execInContainer, restartFluxos } from '../framework/container.js';
+import { execInContainer, requireAppContainerName, restartFluxos } from '../framework/container.js';
 import { pushBusybox } from '../framework/registry-helper.js';
 import { buildSeedableApp } from '../framework/seed-helper.js';
 import { bootAndPeer, seedSpawnerApp } from '../framework/reconciler-suite.js';
@@ -234,7 +234,9 @@ describe('2503 app containers on a node with br_netfilter loaded', function suit
 
     const bridge = await bridgeOf(`fluxDockerNetwork_${appName}`);
     const before = await bridgeHits('RETURN', bridge, bridge);
-    expect(await tcpAnswer(`fluxfront_${appName}`, await containerIp(`fluxback_${appName}`), TCP_PORT)).to.equal('ok');
+    const front = await requireAppContainerName(node.container, appName, 'front');
+    const back = await requireAppContainerName(node.container, appName, 'back');
+    expect(await tcpAnswer(front, await containerIp(back), TCP_PORT)).to.equal('ok');
     expect(await bridgeHits('RETURN', bridge, bridge)).to.be.above(before);
   });
 });

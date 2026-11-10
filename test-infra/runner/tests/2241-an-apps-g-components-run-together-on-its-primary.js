@@ -2,7 +2,7 @@
 import { describe, it, before, after } from 'mocha';
 import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
-import { execInContainer, crashFluxos, releaseFluxos } from '../framework/container.js';
+import { crashFluxos, execInContainer, releaseFluxos, requireAppContainerName } from '../framework/container.js';
 import { pushTestApp } from '../framework/registry-helper.js';
 import { buildSeedableApp } from '../framework/seed-helper.js';
 import { bootAndPeer, installOnNodes } from '../framework/reconciler-suite.js';
@@ -87,7 +87,7 @@ describe('an app\'s g: components run together on its primary', function () {
     this.timeout(420000);
     // The whole machine: the process, the containers and the daemon.
     await crashFluxos(client(FIRST).container, { hold: true });
-    await Promise.all(COMPONENTS.map((component) => execInContainer(client(FIRST).container, `docker kill ${folderOf(component)}`)));
+    await Promise.all(COMPONENTS.map((component) => requireAppContainerName(client(FIRST).container, appName, component).then((name) => execInContainer(client(FIRST).container, `docker kill ${name}`))));
     await stopDaemon(client(FIRST));
 
     await waitHolding(async () => (await oneHolderAtMost())[SECOND].length === COMPONENTS.length, {

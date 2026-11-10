@@ -2,7 +2,7 @@
 import { describe, it, before, after } from 'mocha';
 import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
-import { execInContainer } from '../framework/container.js';
+import { execInContainer, requireAppContainerName } from '../framework/container.js';
 import { pushTestApp } from '../framework/registry-helper.js';
 import { buildSeedableApp } from '../framework/seed-helper.js';
 import { bootAndPeer, installOnNodes } from '../framework/reconciler-suite.js';
@@ -40,15 +40,16 @@ describe('a g: component that dies on its primary is restarted there', function 
   });
   // When docker last started a component's container on a node.
   const startedAt = async (i, name) => {
-    const r = await execInContainer(client(i).container, `docker inspect -f '{{.State.StartedAt}}' ${folderOf(name)}`);
-    if (r.exitCode !== 0 || !r.stdout.trim()) throw new Error(`docker inspect ${folderOf(name)} on node ${i} failed: ${r.stderr || r.stdout}`);
+    const container = await requireAppContainerName(client(i).container, appName, name);
+    const r = await execInContainer(client(i).container, `docker inspect -f '{{.State.StartedAt}}' ${container}`);
+    if (r.exitCode !== 0 || !r.stdout.trim()) throw new Error(`docker inspect ${container} on node ${i} failed: ${r.stderr || r.stdout}`);
     return r.stdout.trim();
   };
   // Kills the given components on the primary, and holds until it runs every g:
   // component again, each killed one in a container docker started after the kill.
   const restartedInPlace = async (names, label) => {
     const before = await Promise.all(names.map((name) => startedAt(PRIMARY, name)));
-    await Promise.all(names.map((name) => execInContainer(client(PRIMARY).container, `docker kill ${folderOf(name)}`)));
+    await Promise.all(names.map((name) => requireAppContainerName(client(PRIMARY).container, appName, name).then((container) => execInContainer(client(PRIMARY).container, `docker kill ${container}`))));
     await waitHolding(async () => {
       const running = await oneHolderAtMost();
       if (running[PRIMARY].length !== COMPONENTS.length) return false;

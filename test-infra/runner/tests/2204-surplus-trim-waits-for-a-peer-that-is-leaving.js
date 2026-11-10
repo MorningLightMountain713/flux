@@ -3,7 +3,7 @@ import { describe, it, before, after } from 'mocha';
 import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
 import {
-  execInContainer, isAppContainerRunning, shutdownFluxosGracefully, releaseFluxos, crashFluxos,
+  crashFluxos, execInContainer, isAppContainerRunning, releaseFluxos, requireAppContainerName, shutdownFluxosGracefully,
 } from '../framework/container.js';
 import { pushTestApp } from '../framework/registry-helper.js';
 import { buildSeedableApp } from '../framework/seed-helper.js';
@@ -201,7 +201,7 @@ describe('a surplus trim waits for a peer that is leaving', function () {
     // leaving, so its pass may trim.
     const crashFrom = client(SURPLUS).getLastEventId();
     await crashFluxos(client(PRIMARY).container, { hold: true });
-    await execInContainer(client(PRIMARY).container, `docker kill ${folder}`);
+    await execInContainer(client(PRIMARY).container, `docker kill ${await requireAppContainerName(client(PRIMARY).container, appName)}`);
     await stopDaemon(client(PRIMARY));
     await client(SURPLUS).waitForEvent('primaryRole:changed',
       (d) => d.identifier === identifier && d.to === 'primary', 300000, { afterId: crashFrom });

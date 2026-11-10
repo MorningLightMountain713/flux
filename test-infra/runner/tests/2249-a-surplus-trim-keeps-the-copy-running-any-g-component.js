@@ -2,7 +2,7 @@
 import { describe, it, before, after } from 'mocha';
 import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
-import { execInContainer, crashFluxos, releaseFluxos } from '../framework/container.js';
+import { crashFluxos, execInContainer, releaseFluxos, requireAppContainerName } from '../framework/container.js';
 import { pushTestApp } from '../framework/registry-helper.js';
 import { buildSeedableApp } from '../framework/seed-helper.js';
 import { bootAndPeer, installOnNodes, electionOrder } from '../framework/reconciler-suite.js';
@@ -113,7 +113,7 @@ describe('a surplus trim keeps the copy running any g: component', function () {
     // The first holder dies whole, the second takes the app over, and the first
     // comes back as its standby.
     await crashFluxos(client(OLDER).container, { hold: true });
-    await Promise.all(COMPONENTS.map((name) => execInContainer(client(OLDER).container, `docker kill ${folderOf(name)}`)));
+    await Promise.all(COMPONENTS.map((name) => requireAppContainerName(client(OLDER).container, appName, name).then((name) => execInContainer(client(OLDER).container, `docker kill ${name}`))));
     await stopDaemon(client(OLDER));
     await waitHolding(async () => (await oneHolderAtMost())[NEWEST].length === COMPONENTS.length, {
       timeout: 300000, interval: 3000, label: 'the second holder runs every g: component',
