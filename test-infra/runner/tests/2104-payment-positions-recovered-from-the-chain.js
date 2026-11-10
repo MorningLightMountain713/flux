@@ -62,8 +62,8 @@ describe('payment positions a node never recorded are recovered from the chain a
       return r?.status === 'success';
     }, { timeout: 360000, interval: 3000, label: 'the node answering the app again' });
 
-    expect((await db.appHashRecord(outcome.standing.hash)).txIndex).to.equal(0);
-    expect((await db.appHashRecord(outcome.superseded.hash)).txIndex).to.equal(1);
+    expect((await db.appHashRecord(outcome.standing.hash)).txIndex).to.equal(1);
+    expect((await db.appHashRecord(outcome.superseded.hash)).txIndex).to.equal(0);
     expect((await db.appHashRecord(outcome.standing.hash)).notOnChain).to.equal(undefined);
     const r = await env.clients[NODE].getAppSpecs(name);
     expect(r.data.description).to.equal(outcome.standing.description);
