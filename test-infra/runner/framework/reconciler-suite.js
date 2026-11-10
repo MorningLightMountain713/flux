@@ -21,6 +21,7 @@ import {
 } from './wait.js';
 import { throwIfInfraDead, sleepUnlessInfraDead } from './infra-death.js';
 import { REGISTRY_REPO_HOST, getSubnetConfig } from './subnet-config.js';
+import { IMAGE_TAG } from './flux-spec-vendor.js';
 import { dialerCount, expectedPeerTotal } from './peer-topology.js';
 import { setSynced, setSyncState, setNoPeerData } from './syncthing-control.js';
 import {
@@ -147,8 +148,11 @@ export async function releaseSpawnerHolds(env, appName, indices = spawnerNodes(e
 }
 
 /** The indices that run a spawner: a stub peer or a node not yet booted has no client. */
+// The nodes whose spawner a suite can hold: those running this tree's build. A
+// node on another build (a release a suite upgrades from) has no checkpoints, and
+// its spawner places by that release's rules.
 function spawnerNodes(env) {
-  return env.clients.map((client, i) => (client ? i : -1)).filter((i) => i >= 0);
+  return env.clients.map((client, i) => (client && env.nodeImageTag(i) === IMAGE_TAG ? i : -1)).filter((i) => i >= 0);
 }
 
 /**
