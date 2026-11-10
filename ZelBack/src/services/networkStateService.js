@@ -80,14 +80,6 @@ function startByFetching(waitTimeoutMs) {
       resolve();
     });
 
-    // Every fetched refresh, with what the node now believes the fleet to be, to
-    // the test-only bus: a test that changes the node list otherwise has no way
-    // to know when this node has read the change, because the endpoints that
-    // report one ask the daemon rather than this cache.
-    stateManager.on('updated', () => {
-      fluxEventBus.publish('networkstate:updated', { nodes: stateManager.nodeCount });
-    });
-
     setImmediate(() => stateManager.start());
   });
 }
@@ -123,6 +115,11 @@ async function start(options = {}) {
   stateManager.on('updated', () => {
     const listed = stateManager.state();
     listUpdates.emit('updated');
+    // With what the node now believes the fleet to be, to the test-only bus, from
+    // a delta or a fetch alike: a test that changes the node list otherwise has no
+    // way to know when this node has read the change, because the endpoints that
+    // report one ask the daemon rather than this cache.
+    fluxEventBus.publish('networkstate:updated', { nodes: stateManager.nodeCount });
     departures.noteList(listed.map((node) => node.ip));
     // the same refresh, keyed on outpoints, for the mesh seats: a seat whose
     // holder left the list reads as free at this cell once the grace has run

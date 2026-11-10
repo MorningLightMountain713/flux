@@ -187,8 +187,8 @@ export async function waitForBlockProcessed(node, predicate = () => true, timeou
 
 // --- network state (networkStateService) ---
 
-// The node's OWN view of the fleet, which is a cache refreshed on a timer -
-// not the daemon's list. A suite that changes the node list therefore has no
+// The node's OWN view of the fleet, which it keeps from the daemon's list deltas
+// (or by fetching, where the daemon publishes none) - not the daemon's list. A suite that changes the node list therefore has no
 // way to know when THIS node has read the change: the endpoints that report a
 // list ask the daemon, and sleeping long enough instead is what turns into a
 // flaky suite.
