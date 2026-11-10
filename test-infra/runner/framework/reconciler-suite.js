@@ -142,15 +142,20 @@ export async function holdSpawnerExcept(env, appName, indices) {
   }));
 }
 
-/** Release every node's spawner for this app; a released node judges the app afresh. */
+/**
+ * Release the spawners of the nodes named (every node by default) for this app; a
+ * released node judges the app afresh. A node no hold can reach is passed over.
+ */
 export async function releaseSpawnerHolds(env, appName, indices = spawnerNodes(env)) {
-  await Promise.all(indices.map((i) => env.clients[i].releaseCheckpoint('spawner:beforeAttempt', appName)));
+  const holdable = new Set(spawnerNodes(env));
+  await Promise.all(indices.filter((i) => holdable.has(i))
+    .map((i) => env.clients[i].releaseCheckpoint('spawner:beforeAttempt', appName)));
 }
 
-/** The indices that run a spawner: a stub peer or a node not yet booted has no client. */
-// The nodes whose spawner a suite can hold: those running this tree's build. A
-// node on another build (a release a suite upgrades from) has no checkpoints, and
-// its spawner places by that release's rules.
+// The nodes whose spawner a suite can hold: those with a client (a stub peer or a
+// node not yet booted has none) running this tree's build. A node on another build
+// (a release a suite upgrades from) has no checkpoints, and its spawner places by
+// that release's rules.
 function spawnerNodes(env) {
   return env.clients.map((client, i) => (client && env.nodeImageTag(i) === IMAGE_TAG ? i : -1)).filter((i) => i >= 0);
 }
