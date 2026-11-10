@@ -1,12 +1,17 @@
 [
   {
     "name": "no-missing-contents-fetched",
-    "breaks": "a node fetches from its peers the contents of every paid message it does not hold",
+    "breaks": "a node fetches from its peers the contents of every paid message it does not hold: neither the scan, on recording a payment, nor the hash sync asks",
     "edits": [
       {
         "file": "ZelBack/src/services/appMessaging/appHashSyncService.js",
         "from": "  const results = await appRecords.messages().awaitingContents({ height: currentHeight, force });\n  return results.filter((r) => {",
         "to": "  const results = await appRecords.messages().awaitingContents({ height: currentHeight, force });\n  return results.filter(() => false).filter((r) => {"
+      },
+      {
+        "file": "ZelBack/src/services/explorerService.js",
+        "from": "    setTimeout(requestAppHashes, 1, apps);",
+        "to": "    setTimeout(() => {}, 1, apps);"
       }
     ],
     "red": [
