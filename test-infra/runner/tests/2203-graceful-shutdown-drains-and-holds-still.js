@@ -3,8 +3,9 @@ import { describe, it, before, after } from 'mocha';
 import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
 import {
-  blockTraffic, componentIdentifier, isAppContainerRunning, legacyFolderId, releaseFluxos, shutdownFluxosGracefully, unblockTraffic,
+  blockTraffic, componentIdentifier, isAppContainerRunning, legacyFolderId, releaseFluxos, unblockTraffic,
 } from '../framework/container.js';
+import { shutdownNodeGracefully } from '../framework/node-shutdown.js';
 import { pushTestApp } from '../framework/registry-helper.js';
 import { buildSeedableApp } from '../framework/seed-helper.js';
 import { bootAndPeer, installOnNodes } from '../framework/reconciler-suite.js';
@@ -19,12 +20,13 @@ import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 // A node shutting down hands its single-writer (g:) data to the standby before
 // it goes, and holds still while it does.
 //
-// On a system shutdown FluxOS stops the app's containers - the app writes its
-// final save on SIGTERM - and then waits until every connected peer holds what
-// this node's folders hold. Syncthing is stopped right after FluxOS exits, so
-// whatever has not left by then leaves only after the next boot. The node's
-// shutdown here is the real one: the shutdown marker FluxOS reads, SIGTERM, and
-// the node's own syncthing stopped the moment FluxOS exits.
+// On a system shutdown the shutdown daemon stops the app's containers - the app
+// writes its final save on SIGTERM - and FluxOS then waits until every connected
+// peer holds what this node's folders hold. Syncthing is stopped right after
+// FluxOS exits, so whatever has not left by then leaves only after the next boot.
+// The node's shutdown here is the real one: the real shutdown daemon's pipeline,
+// then the shutdown marker FluxOS reads, SIGTERM, and the node's own syncthing
+// stopped the moment FluxOS exits.
 //
 // While it waits, nothing on the node may start a container again: the stop it
 // has just made is the reason the final save exists.
@@ -52,6 +54,7 @@ describe('a graceful shutdown drains to the standby and holds still', function (
       hookCtx: this,
       nodes: 3,
       syncthing: 'real',
+      shutdownd: 'real',
       tickerAutostart: false,
       configOverrides: {
         fluxapps: { minOutgoing: 1, minIncoming: 1 },
@@ -105,7 +108,8 @@ describe('a graceful shutdown drains to the standby and holds still', function (
     // The primary's syncthing stops the moment FluxOS exits, so what has not
     // reached the standby by then does not reach it at all.
     const mark = client(FIRST).getLastEventId();
-    await shutdownFluxosGracefully(client(FIRST).container, { hold: true, stopSyncthingAfter: true });
+    const { endState } = await shutdownNodeGracefully(client(FIRST).container, { hold: true, stopSyncthingAfter: true });
+    expect(endState, 'the shutdown daemon stopped the apps').to.equal('complete');
     const drained = await client(FIRST).waitForEvent('shutdown:drained', () => true, 10000, { afterId: mark });
     expect(drained.data, 'the primary drained to completion').to.include({ complete: true });
 
@@ -134,7 +138,7 @@ describe('a graceful shutdown drains to the standby and holds still', function (
     try {
       const started = Date.now();
       const mark = client(SECOND).getLastEventId();
-      const shutdown = shutdownFluxosGracefully(client(SECOND).container, { hold: true });
+      const shutdown = shutdownNodeGracefully(client(SECOND).container, { hold: true });
       let settled = false;
       shutdown.finally(() => { settled = true; }).catch(() => {});
 
