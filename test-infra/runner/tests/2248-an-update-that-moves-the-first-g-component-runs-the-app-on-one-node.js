@@ -84,7 +84,9 @@ describe('an update that moves the first g: component runs the app on one node',
       syncthing: 'real',
       tickerAutostart: false,
       configOverrides: {
-        fluxapps: { minOutgoing: 1, minIncoming: 1 },
+        fluxapps: {
+          minOutgoing: 1, minIncoming: 1, adoptionStaggerStepMs: 5000, adoptionStaggerWindowMs: 10000,
+        },
       },
     });
     await bootAndPeer(env, { minOutbound: 1, minInbound: 1 });

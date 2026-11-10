@@ -47,7 +47,9 @@ describe('a redeploy whose record write fails keeps the app', function () {
 
   before(async function () {
     this.timeout(420000);
-    env = await createTestEnv({ hookCtx: this, nodes: 5, tickerAutostart: false });
+    env = await createTestEnv({
+      hookCtx: this, nodes: 5, tickerAutostart: false, configOverrides: { fluxapps: { adoptionStaggerStepMs: 5000, adoptionStaggerWindowMs: 10000 } },
+    });
     await bootAndPeer(env);
     holder = env.clients[HOLDER];
 

@@ -1,8 +1,8 @@
 // fleet: 5
 /*
  * An app's volume is a loop-mounted image file, and its loop device uses direct
- * I/O: from the mount that creates it, through a spec update that reinstalls the
- * app, and after the node restarts and FluxOS mounts it again.
+ * I/O: from the mount that creates it, through a spec update that gives the app a
+ * larger volume, and after the node restarts and FluxOS mounts it again.
  *
  * A buffered loop device caches the image file in the host page cache on top of
  * the cache the filesystem inside it keeps, and both are charged to the app's
@@ -55,7 +55,9 @@ describe('an app volume uses direct I/O', function () {
   before(async function () {
     this.timeout(420000);
 
-    env = await createTestEnv({ hookCtx: this, nodes: 5, tickerAutostart: false });
+    env = await createTestEnv({
+      hookCtx: this, nodes: 5, tickerAutostart: false, configOverrides: { fluxapps: { adoptionStaggerStepMs: 5000, adoptionStaggerWindowMs: 10000 } },
+    });
     await bootAndPeer(env);
     [holder] = env.clients;
 
@@ -99,12 +101,12 @@ describe('an app volume uses direct I/O', function () {
   });
 
   it('keeps direct I/O on the volume through a spec update', async function () {
-    // Counted in blocks, as suite 85 explains: the reinstall pass fires on a
-    // block-height modulus, so the chain is driven rather than waited on.
     this.timeout(1500000);
 
+    // A larger volume: a change to the component's storage, which mounts its
+    // volume again. A change no container runs differently replaces nothing.
     const updated = await buildSeedableUpdate(app, (spec) => {
-      spec.compose[0].description = 'direct I/O test container, second specification';
+      spec.compose[0].hdd += 1;
     });
     const beforeUpdate = holder.getLastEventId();
     await seedSpecUpdate(env, updated, [0]);

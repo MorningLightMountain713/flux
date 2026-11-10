@@ -58,6 +58,7 @@ describe('a redeploy keeps the app on a node with room for its new specification
       nodes: 5,
       tickerAutostart: false,
       nodeTiers: { 1: 'CUMULUS' },
+      configOverrides: { fluxapps: { adoptionStaggerStepMs: 5000, adoptionStaggerWindowMs: 10000 } },
       nodeConfigOverrides: { 0: ROOM_FOR_ONE_COPY },
     });
     await bootAndPeer(env);
@@ -98,8 +99,6 @@ describe('a redeploy keeps the app on a node with room for its new specification
   });
 
   it('replaces the component at the new specification and keeps the app', async function () {
-    // Counted in blocks, as suite 85 explains: the reinstall pass fires on a
-    // block-height modulus, so the chain is driven rather than waited on.
     this.timeout(1500000);
 
     const updated = await buildSeedableUpdate(app, (spec) => {
