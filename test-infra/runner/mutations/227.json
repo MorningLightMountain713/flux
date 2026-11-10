@@ -1,0 +1,36 @@
+[
+  {
+    "name": "the-last-payment-of-a-block-recorded",
+    "breaks": "a hash paid twice in one block is recorded with its first payment",
+    "edits": [
+      {
+        "file": "ZelBack/src/services/explorerService.js",
+        "from": "        const held = appsTransactions.some((record) => record.hash === payment.hash) || await appRecords.messages().byHash(payment.hash);",
+        "to": "        const held = await appRecords.messages().byHash(payment.hash);"
+      },
+      {
+        "file": "test-infra/flux-spec/dist/packages/spec-backend/src/domain/AppMessages.js",
+        "from": "      if (byHash.has(payment.hash)) result.standing.push(payment.hash);",
+        "to": "      if (false) result.standing.push(payment.hash);"
+      }
+    ],
+    "red": [
+      "records the twice-paid message with its first payment",
+      "registers the twice-paid app on every node"
+    ]
+  },
+  {
+    "name": "the-upgrade-keeps-the-payment-read-first",
+    "breaks": "a node upgrading from payment records that hold two payments of a hash keeps the first in chain order",
+    "edits": [
+      {
+        "file": "ZelBack/src/services/migrations/appMessages.js",
+        "from": "      .sort((x, y) => offChain(x) - offChain(y) || x.height - y.height || (x.txIndex ?? Infinity) - (y.txIndex ?? Infinity));",
+        "to": "      .sort(() => 0);"
+      }
+    ],
+    "red": [
+      "keeps the first payment when it upgrades onto v9 from payment records that hold both"
+    ]
+  }
+]

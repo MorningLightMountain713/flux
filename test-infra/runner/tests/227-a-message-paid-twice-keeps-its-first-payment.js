@@ -1,4 +1,4 @@
-// fleet: 5
+// fleet: 6
 /*
  * A message paid more than once in one block is recorded with its first payment, on every node.
  *
@@ -7,8 +7,9 @@
  * only that minimum: every node records the payment and stores the message, and refuses the app
  * as underpaid - so a record of the second payment would have refused the first app too.
  *
- * A node that boots on payment records holding both payments - its unique index lost and the
- * second payment written beside the first - rebuilds the index and keeps the first payment.
+ * A node upgrading onto v9 from a release whose payment records hold both payments keeps the
+ * first, and registers the app. It is the sixth node, booted last on those records, with its scan
+ * already at the tip, so the payments it holds are the ones it carried.
  *
  * The chain moves only when this suite mines a block: the ticker is stopped after boot.
  */
@@ -85,7 +86,9 @@ describe('a message paid twice in one block keeps its first payment, on every no
 
   before(async function () {
     this.timeout(900000);
-    env = await createTestEnv({ hookCtx: this, nodes: 5, tickerAutostart: false });
+    env = await createTestEnv({
+      hookCtx: this, nodes: 6, deferredNodes: 1, tickerAutostart: false,
+    });
     await bootAndPeer(env);
     await stopTicker();
     live = env.clients.filter(Boolean);
@@ -101,7 +104,7 @@ describe('a message paid twice in one block keeps its first payment, on every no
     ]);
     await waitFor(allAtTip, { timeout: 150000, interval: 1000, label: 'every node processes the payment block' });
     await waitFor(
-      async () => (await onEveryNode((db) => db.permanentMessages({ hash: { $in: [paidHash, cheapHash] } }))).every((held) => held.length === 2),
+      async () => (await onEveryNode((db) => db.appMessages({ hash: { $in: [paidHash, cheapHash] }, held: true }))).every((held) => held.length === 2),
       { timeout: 120000, interval: 2000, label: 'both messages stored on every node' },
     );
   });
@@ -112,16 +115,16 @@ describe('a message paid twice in one block keeps its first payment, on every no
   });
 
   it('records the twice-paid message with its first payment', async () => {
-    const records = await onEveryNode((db) => db.appHashRecords({ hash: paidHash }));
-    records.forEach((held, i) => {
-      expect(held.map((r) => [r.txid, r.value]), `node ${liveIndices[i]}`).to.deep.equal([[txids.price, PRICE_SAT]]);
+    const records = await onEveryNode((db) => db.appHashRecord(paidHash));
+    records.forEach((record, i) => {
+      expect([record.txid, record.value], `node ${liveIndices[i]}`).to.deep.equal([txids.price, PRICE_SAT]);
     });
   });
 
   it('records the minimum payment, and refuses the app paid only that', async () => {
-    const records = await onEveryNode((db) => db.appHashRecords({ hash: cheapHash }));
-    records.forEach((held, i) => {
-      expect(held.map((r) => [r.txid, r.value]), `node ${liveIndices[i]}`).to.deep.equal([[txids.cheapOnly, MIN_PRICE_SAT]]);
+    const records = await onEveryNode((db) => db.appHashRecord(cheapHash));
+    records.forEach((record, i) => {
+      expect([record.txid, record.value], `node ${liveIndices[i]}`).to.deep.equal([txids.cheapOnly, MIN_PRICE_SAT]);
     });
     const specs = await onEveryNode((db) => db.globalAppSpec(cheapSpec.name));
     specs.forEach((spec, i) => expect(spec, `node ${liveIndices[i]}`).to.equal(null));
@@ -134,27 +137,42 @@ describe('a message paid twice in one block keeps its first payment, on every no
     );
   });
 
-  it('keeps the first payment when it boots on records that hold both', async function () {
-    this.timeout(300000);
-    const node = liveIndices[0];
-    const db = dbClient(node + 1);
-    const [first] = await db.appHashRecords({ hash: paidHash });
-    await db.dropAppHashIndex('query for getting app hash');
-    await db.insertAppHashRecord({
-      ...first, txid: txids.minimum, value: MIN_PRICE_SAT, txIndex: (first.txIndex ?? 0) + 1,
+  it('keeps the first payment when it upgrades onto v9 from payment records that hold both', async function () {
+    this.timeout(420000);
+    const upgraded = env.lastNodeIndex;
+    const source = dbClient(liveIndices[0] + 1);
+    const first = await source.appHashRecord(paidHash);
+    const [held] = await source.appMessages({ hash: paidHash, held: true });
+    const legacy = dbClient(upgraded + 1);
+    const paymentRow = (txid, value, txIndex) => ({
+      txid, height: first.height, txIndex, hash: paidHash, value, message: true,
     });
-    expect((await db.appHashRecords({ hash: paidHash })).length, 'the second payment was not written').to.equal(2);
+    // The release's records: both payments, the second written first, and no
+    // unique index on the hash; the permanent message as the release stores it.
+    await legacy.seedLegacyAppStore({
+      payments: [paymentRow(txids.minimum, MIN_PRICE_SAT, first.txIndex + 1), paymentRow(txids.price, PRICE_SAT, first.txIndex)],
+      messages: [{
+        hash: held.hash,
+        type: held.type,
+        version: held.version,
+        appSpecifications: held.appSpecifications,
+        timestamp: held.timestamp,
+        signature: held.signature,
+        txid: txids.price,
+        height: first.height,
+        valueSat: PRICE_SAT,
+      }],
+      listed: [],
+    });
+    await legacy.seedScannedHeight((await getState()).currentHeight);
 
-    await env.restartNode(node);
-    await waitForDaemonReady(env.clients[node]);
-    await waitFor(
-      async () => (await db.appHashIndexes()).some((index) => index.name === 'query for getting app hash' && index.unique),
-      { timeout: 180000, interval: 2000, label: 'the node rebuilds the unique hash index' },
-    );
+    const client = await env.startNode(upgraded);
+    await waitForDaemonReady(client);
+    await env.startDiscovery([upgraded]);
+    await waitFor(async () => (await legacy.globalAppSpec(paidSpec.name))?.hash === paidHash,
+      { timeout: 300000, interval: 3000, label: `the upgraded node registers ${paidSpec.name}` });
 
-    const records = await db.appHashRecords({ hash: paidHash });
-    expect(records.map((r) => [r.txid, r.value])).to.deep.equal([[txids.price, PRICE_SAT]]);
-    const [message] = await db.permanentMessages({ hash: paidHash });
-    expect(message.txid, 'the stored message is not on the first payment').to.equal(txids.price);
+    const record = await legacy.appHashRecord(paidHash);
+    expect([record.txid, record.value]).to.deep.equal([txids.price, PRICE_SAT]);
   });
 });
