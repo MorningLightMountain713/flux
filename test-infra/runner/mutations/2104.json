@@ -12,5 +12,19 @@
     "red": [
       "reads only the payment records without a position when it looks for ones to backfill"
     ]
+  },
+  {
+    "name": "backfill-keeps-the-recorded-height",
+    "breaks": "a record carried without a position at a height its transaction is not at takes the chain's height",
+    "edits": [
+      {
+        "file": "ZelBack/src/services/migrations/paymentPositions.js",
+        "from": "      placed.push({ hash, txIndex: position.txIndex, height: position.height });",
+        "to": "      placed.push({ hash, txIndex: position.txIndex, height });"
+      }
+    ],
+    "red": [
+      "decides a record carried without a position at a height its transaction is not at, at the chain's height"
+    ]
   }
 ]

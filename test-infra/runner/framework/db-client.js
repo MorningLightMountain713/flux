@@ -316,6 +316,15 @@ export function dbClient(nodeNum) {
       return globalDb.collection('appdecisions').findOne({ hash }, { projection: { _id: 0 } });
     },
 
+    // Remove this node's decision on a paid app message, as a record carried
+    // from a release before v9 holds none. For a node whose FluxOS is about to
+    // start: a running decider decides the message again on its next pass.
+    async removeDecision(hash) {
+      const globalDb = await db('appsGlobal');
+      const { deletedCount } = await globalDb.collection('appdecisions').deleteOne({ hash });
+      if (deletedCount !== 1) throw new Error(`no decision on ${hash}`);
+    },
+
     // The version the app on this node's registration row was registered with:
     // the spec version of the first message the decider applied for the row's
     // uuid, as the node reads it when it names the app's components.
