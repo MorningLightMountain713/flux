@@ -80,9 +80,10 @@ describe('a redeploy whose record write fails keeps the app', function () {
       return Boolean(containerBefore);
     }, { timeout: 120000, interval: 2000, label: 'the app is running before its spec changes' });
 
-    // a description change takes the soft path, which keeps the data volume
+    // An environment change recreates the container and keeps the data volume; a
+    // change the container does not run with recreates nothing.
     updated = await buildSeedableUpdate(app, (spec) => {
-      spec.compose[0].description = 'redeploy row test container, second specification';
+      spec.compose[0].environmentParameters = ['SPECIFICATION=2'];
     });
     beforeUpdate = holder.getLastEventId();
     await seedSpecUpdate(env, updated, [HOLDER]);
