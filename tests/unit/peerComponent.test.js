@@ -211,6 +211,19 @@ describe('peerComponent tests', () => {
           .to.equal(peerFolderLiveness.SilenceVerdict.CONNECTION_ALIVE);
       });
 
+      it('reads a live connection at the address as connected, whatever the network says of the node', async () => {
+        evidence([], 'none');
+        syncthingService.getDeviceConnections.resolves({ PEERDEVICE: { connected: true } });
+
+        expect(await peerFolderLiveness.syncthingConnected('fluxweb_a', PEER)).to.equal(true);
+      });
+
+      it('reads a connection this node\'s syncthing saw close as not connected', async () => {
+        evidence([], 'none');
+
+        expect(await peerFolderLiveness.syncthingConnected('fluxweb_a', PEER)).to.equal(false);
+      });
+
       // Its connection went with it: this node has no connection left to ask about.
       it('frees the app of a certified peer whose device this node no longer holds', async () => {
         evidence([]);

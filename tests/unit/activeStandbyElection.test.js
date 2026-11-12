@@ -9,6 +9,9 @@ const appOperations = require('../../ZelBack/src/services/appLifecycle/appOperat
 const primaryRole = require('../../ZelBack/src/services/appLifecycle/primaryRole');
 const appGiveUp = require('../../ZelBack/src/services/appLifecycle/appGiveUp');
 const peerComponent = require('../../ZelBack/src/services/appMonitoring/peerComponent');
+const peerFolderLiveness = require('../../ZelBack/src/services/appMonitoring/peerFolderLiveness');
+const networkStateService = require('../../ZelBack/src/services/networkStateService');
+const delistedHolders = require('../../ZelBack/src/services/quorumGrant/delistedHolders');
 const mastershipGrantGate = require('../../ZelBack/src/services/appLifecycle/mastershipGrantGate');
 const appReconciler = require('../../ZelBack/src/services/appMonitoring/appReconciler');
 const serviceHelper = require('../../ZelBack/src/services/serviceHelper');
@@ -685,6 +688,95 @@ describe('activeStandbyElection', () => {
         await applyMove('192.168.1.200:16127', '192.168.1.201:16127');
 
         sinon.assert.notCalled(registryManager.appLocation);
+      });
+
+      describe('followed by its collateral', () => {
+        const MOVED = '192.168.1.91:16127';
+        const COLLATERAL = { txhash: 'a'.repeat(64), outidx: 0 };
+        let listed;
+        let connected;
+
+        beforeEach(() => {
+          listed = sinon.stub(networkStateService, 'networkState').returns([{ ip: OLD, ...COLLATERAL }]);
+          connected = sinon.stub(peerFolderLiveness, 'syncthingConnected').resolves(false);
+        });
+
+        it('asks the node its collateral is listed at now, and takes over when it holds none of the app', async () => {
+          const deployment = await FIXTURES['registered on v9']();
+          await rememberPrimary(deployment);
+          listed.returns([{ ip: MOVED, ...COLLATERAL }]);
+          registryManager.appLocation.resolves([seniorHere]);
+
+          await passAfterMove(deployment, MOVED);
+
+          sinon.assert.calledWith(asked, MOVED);
+          sinon.assert.neverCalledWith(asked, OLD);
+          sinon.assert.calledWith(connected, sinon.match.string, OLD);
+          expect(taken()).to.deep.equal(['promote']);
+        });
+
+        it('holds while this node\'s syncthing is still connected at the address the primary ran at', async () => {
+          const deployment = await FIXTURES['registered on v9']();
+          await rememberPrimary(deployment);
+          listed.returns([{ ip: MOVED, ...COLLATERAL }]);
+          registryManager.appLocation.resolves([seniorHere]);
+          connected.resolves(true);
+
+          await passAfterMove(deployment, MOVED);
+
+          sinon.assert.notCalled(asked);
+          expect(taken()).to.deep.equal([]);
+        });
+
+        it('asks the primary where it was remembered while its collateral is listed there', async () => {
+          const deployment = await FIXTURES['registered on v9']();
+          await rememberPrimary(deployment);
+
+          await passAfterMove(deployment, MOVED);
+
+          sinon.assert.calledWith(asked, OLD);
+          sinon.assert.notCalled(connected);
+          expect(taken()).to.deep.equal([]);
+        });
+
+        it('forgets a primary whose collateral left the list past the grace, and takes over', async () => {
+          const deployment = await FIXTURES['registered on v9']();
+          await rememberPrimary(deployment);
+          listed.returns([]);
+          sinon.stub(delistedHolders, 'isDelistedHolder').returns(true);
+          registryManager.appLocation.resolves([seniorHere]);
+
+          await passAfterMove(deployment, MOVED);
+
+          sinon.assert.neverCalledWith(asked, OLD);
+          expect(taken()).to.deep.equal(['promote']);
+        });
+
+        it('keeps asking a primary whose collateral left the list inside the grace', async () => {
+          const deployment = await FIXTURES['registered on v9']();
+          await rememberPrimary(deployment);
+          listed.returns([]);
+          sinon.stub(delistedHolders, 'isDelistedHolder').returns(false);
+
+          await passAfterMove(deployment, MOVED);
+
+          sinon.assert.calledWith(asked, OLD);
+          expect(taken()).to.deep.equal([]);
+        });
+
+        it('asks a primary that signed its move at its new address without reading the address it left', async () => {
+          const deployment = await FIXTURES['registered on v9']();
+          await rememberPrimary(deployment);
+          listed.returns([{ ip: MOVED, ...COLLATERAL }]);
+          registryManager.appLocation.resolves(seniorAt(MOVED));
+
+          await applyMove(OLD, MOVED);
+          await passAfterMove(deployment, MOVED);
+
+          sinon.assert.calledWith(asked, MOVED);
+          sinon.assert.notCalled(connected);
+          expect(taken()).to.deep.equal(['promote']);
+        });
       });
 
       it('reads no recorded moves in a pass, whether FDM names a primary or none', async () => {

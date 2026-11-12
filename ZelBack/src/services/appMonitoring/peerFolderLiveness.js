@@ -448,6 +448,18 @@ async function peerSyncthingConnection(folderId, peerIp) {
 }
 
 /**
+ * Whether this node's syncthing holds a live connection, for one folder, to the
+ * device it knows at a peer's address: a machine there may still be writing
+ * what the folder holds, whatever the network says of the node.
+ * @param {string} folderId
+ * @param {string} peerIp
+ * @returns {Promise<boolean>}
+ */
+async function syncthingConnected(folderId, peerIp) {
+  return (await peerSyncthingConnection(folderId, peerIp)) === PeerConnection.CONNECTED;
+}
+
+/**
  * What a peer's silence is worth as evidence that it has stopped: one of
  * SilenceVerdict. The caller has already established the silence - this
  * answers only whether it may be acted on.
@@ -489,6 +501,7 @@ module.exports = {
   createPeerFolderLiveness,
   silenceVerdict,
   SilenceVerdict,
+  syncthingConnected,
   PROBE_TIMEOUT_MS,
   MIN_RESPONDING_PEER_FRACTION,
   RECONNECT_GRACE_MS,

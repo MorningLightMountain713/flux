@@ -21,6 +21,7 @@ const {
   DROP_REASON,
 } = require('../utils/nodeDownCertificates');
 const { normalizeSocketAddress } = require('../utils/socketAddressUtils');
+const { listedOutpointAt } = require('../utils/nodeListLookup');
 const { LIE_REASON, verifyLieCertificate } = require('../utils/stopStatements');
 
 // The nodedown record store: one row PER DEATH, keyed on the death's number
@@ -428,12 +429,7 @@ async function lockoutFor(subject) {
  * @returns {string|null} outpoint
  */
 function listedSubjectAt(socketAddress) {
-  const wanted = normalizeSocketAddress(socketAddress);
-  const listed = networkStateService.networkState().find((node) => {
-    const nodeAddress = normalizeSocketAddress(node.ip);
-    return nodeAddress === wanted || nodeAddress?.split(':')[0] === wanted;
-  });
-  return listed ? `${listed.txhash}:${listed.outidx}` : null;
+  return listedOutpointAt(networkStateService.networkState(), socketAddress);
 }
 
 async function placementFreezeForAddress(socketAddress) {

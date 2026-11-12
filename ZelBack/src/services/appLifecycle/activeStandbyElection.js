@@ -13,6 +13,8 @@ const appQueryService = require('../appQuery/appQueryService');
 const appReconciler = require('../appMonitoring/appReconciler');
 const peerFolderLiveness = require('../appMonitoring/peerFolderLiveness');
 const peerComponent = require('../appMonitoring/peerComponent');
+const networkStateService = require('../networkStateService');
+const delistedHolders = require('../quorumGrant/delistedHolders');
 
 const { PeerComponent } = peerComponent;
 const appsRuntimeState = require('../appManagement/appsRuntimeState');
@@ -24,6 +26,7 @@ const { compareInstanceSeniority } = require('../utils/instanceOrdering');
 const { getSpecBackend } = require('../utils/specLibs');
 const { extractIp, extractPort, ipsMatch, socketAddressesMatch } = require('../utils/socketAddressUtils');
 const { addressMoveEvents, EVENTS: ADDRESS_MOVE_EVENTS } = require('../utils/addressMoveEvents');
+const { listedOutpointAt, listedAddressOf } = require('../utils/nodeListLookup');
 const mastershipGrantGate = require('./mastershipGrantGate');
 const primaryRole = require('./primaryRole');
 const primaryRoleChanges = require('./primaryRoleChanges');
@@ -42,6 +45,10 @@ const appGiveUp = require('./appGiveUp');
 // The primary each anchor identifier was last read to have, and when each
 // verdict - a primary, or none - was read.
 const primaryByIdentifier = new Map();
+// The collateral each remembered primary was listed with, when it was first
+// remembered with it, and the address it ran at before the list showed it
+// elsewhere: { outpoint, since, formerAddress }.
+const primaryCollateralByIdentifier = new Map();
 const appNameByIdentifier = new Map();
 const electionCheckedAt = new Map();
 // How long an election record is worth reading: ten election cycles, so one missed
@@ -76,11 +83,56 @@ async function followMovedPrimaries({ from, to }) {
     }
     if (socketAddressesMatch(primaryByIdentifier.get(identifier), from)) {
       primaryByIdentifier.set(identifier, to);
+      const collateral = primaryCollateralByIdentifier.get(identifier);
+      if (collateral) collateral.formerAddress = null;
       log.info(`activeStandby: previous primary of ${identifier} moved from ${from} to ${to} - following it`);
     }
   }
 }
 addressMoveEvents.on(ADDRESS_MOVE_EVENTS.APPLIED, followMovedPrimaries);
+
+/**
+ * Carries a remembered primary to where its collateral is listed now. A node is
+ * its collateral: listed at another address, it is the node there that runs or
+ * does not run the app, whichever machine that is, and the election asks it there.
+ * Gone from the list past the grace, it is no primary, and the record is dropped.
+ *
+ * Either way the address the primary ran at must hold no live syncthing connection
+ * to this node: a machine there may still be writing what this node would start.
+ * A move the node signed proves the machine there is the one that moved, and
+ * clears that address.
+ * @param {string} identifier
+ * @param {string[]} folderIds The component folders, as this node's syncthing knows them.
+ * @param {string} appName
+ * @returns {Promise<boolean>} false while that address holds a live connection.
+ */
+async function followPrimaryCollateral(identifier, folderIds, appName) {
+  const collateral = primaryCollateralByIdentifier.get(identifier);
+  if (!collateral) return true;
+  const remembered = primaryByIdentifier.get(identifier);
+  const listedAt = listedAddressOf(networkStateService.networkState(), collateral.outpoint);
+  if (listedAt && !socketAddressesMatch(listedAt, remembered)) {
+    collateral.formerAddress = collateral.formerAddress ?? remembered;
+    primaryByIdentifier.set(identifier, listedAt);
+    log.info(`activeStandby: previous primary of ${identifier} is listed at ${listedAt}, its collateral having left ${remembered} - following it`);
+  }
+  const delisted = !listedAt && delistedHolders.isDelistedHolder(collateral.outpoint, collateral.since);
+  if (!collateral.formerAddress && !delisted) return true;
+
+  const ranAt = collateral.formerAddress ?? remembered;
+  const connected = await Promise.all(folderIds.map((folderId) => peerFolderLiveness.syncthingConnected(folderId, ranAt)));
+  if (connected.some(Boolean)) {
+    fluxEventBus.count('masterSlave:decision', identifier, 'formerPrimaryConnected');
+    log.info(`activeStandby: app:${appName}'s previous primary ran at ${ranAt}, and this node's syncthing still holds a live connection there, will not start`);
+    return false;
+  }
+  if (delisted) {
+    primaryByIdentifier.delete(identifier);
+    primaryCollateralByIdentifier.delete(identifier);
+    log.info(`activeStandby: previous primary of ${identifier} left the node list - no primary is remembered`);
+  }
+  return true;
+}
 
 /**
  * The FDM index an app's name falls under (1-4).
@@ -453,6 +505,7 @@ async function decideUnnamed({
   // is stale, and keeping it would leave the last primary unelectable.
   if (primaryByIdentifier.has(identifier) && ipsMatch(primaryByIdentifier.get(identifier), localSocketAddr)) {
     primaryByIdentifier.delete(identifier);
+    primaryCollateralByIdentifier.delete(identifier);
     log.info(`activeStandby: cleared this node's stale primary record for ${identifier} - it is not running here`);
     fluxEventBus.publish('activeStandby:decided', { identifier, action: 'stalePrimaryEvicted' });
   }
@@ -476,6 +529,7 @@ async function decideUnnamed({
   };
   const start = () => startMembers(members, runningIdentifiers);
   const peerWords = (state) => (state === PeerComponent.RUNNING ? 'is already running it' : 'could not be ruled out');
+  if (primaryByIdentifier.has(identifier) && !await followPrimaryCollateral(identifier, probeCtx.folderIds, appName)) return;
 
   if (resumingMembers.some((member) => member.stop.asPrimary)) {
     // Its operator started an app this node was the primary of when it was
@@ -613,6 +667,25 @@ async function decideUnnamed({
 }
 
 /**
+ * Records the collateral listed at a named primary's address, from when it was
+ * first named with it.
+ * @param {string} identifier
+ * @param {string} address
+ */
+function rememberCollateral(identifier, address) {
+  const outpoint = listedOutpointAt(networkStateService.networkState(), address);
+  if (!outpoint) {
+    primaryCollateralByIdentifier.delete(identifier);
+    return;
+  }
+  if (primaryCollateralByIdentifier.get(identifier)?.outpoint === outpoint) {
+    primaryCollateralByIdentifier.get(identifier).formerAddress = null;
+    return;
+  }
+  primaryCollateralByIdentifier.set(identifier, { outpoint, since: Date.now(), formerAddress: null });
+}
+
+/**
  * The decision for an app a primary is named for. With the grant plane open the
  * grant is final: a node it does not name stands down, and the node it names
  * starts, asking nobody. Otherwise the named primary is FDM's, and a holder asks
@@ -625,6 +698,7 @@ async function decideNamed({
   fluxEventBus.count('masterSlave:decision', identifier, 'primaryObserved');
   noPrimaryAnnounced.delete(identifier);
   primaryByIdentifier.set(identifier, ip);
+  rememberCollateral(identifier, ip);
   appNameByIdentifier.set(identifier, appName);
   if (scheduledStart.has(identifier)) {
     log.info(`activeStandby: app:${appName} removed from the scheduled starts, already started on another standby node`);
@@ -715,7 +789,7 @@ async function yieldToGrantee({ appName, members, runningIdentifiers }) {
  * @param {Set<string>} validIdentifiers
  */
 function forgetRemoved(validIdentifiers) {
-  for (const records of [primaryByIdentifier, appNameByIdentifier, electionCheckedAt, scheduledStart]) {
+  for (const records of [primaryByIdentifier, primaryCollateralByIdentifier, appNameByIdentifier, electionCheckedAt, scheduledStart]) {
     for (const identifier of records.keys()) {
       if (!validIdentifiers.has(identifier)) records.delete(identifier);
     }
