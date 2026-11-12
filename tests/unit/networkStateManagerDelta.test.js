@@ -222,6 +222,32 @@ describe('networkStateManager applyDelta tests', () => {
       expect((await manager.search('pub-a', 'pubkey')).get('10.9.9.9').ip).to.equal('10.9.9.9');
     });
 
+    it('leaves a record read before an update as it was read', async () => {
+      await seed([rpcNode()]);
+      const [held] = manager.state();
+
+      await manager.applyDelta(
+        delta({ updated: [deltaNode({ ip: '10.9.9.9', lastPaidHeight: 2001 })] }),
+        sinon.stub(),
+      );
+
+      expect(held.ip).to.equal('10.0.0.1');
+      expect(held.last_paid_height).to.equal(1200);
+      expect(manager.state().map((node) => node.ip)).to.deep.equal(['10.9.9.9']);
+    });
+
+    it('should re-key the pubkey index when a node changes key at the same ip', async () => {
+      await seed([rpcNode()]);
+
+      await manager.applyDelta(
+        delta({ updated: [deltaNode({ pubkey: 'pub-b' })] }),
+        sinon.stub(),
+      );
+
+      expect(await manager.search('pub-a', 'pubkey')).to.equal(null);
+      expect((await manager.search('pub-b', 'pubkey')).get('10.0.0.1').pubkey).to.equal('pub-b');
+    });
+
     it('should not resurrect a node it does not hold', async () => {
       await seed([rpcNode()]);
 

@@ -674,6 +674,9 @@ class NetworkStateManager extends EventEmitter {
       if (node) this.#deindexNode(node);
     });
 
+    // A node's record is replaced, never edited: a reader holding a record keeps the
+    // node as it was when read, across any await.
+    const replaced = new Map();
     delta.updated.forEach((entry) => {
       const key = NetworkStateManager.outpointKey(entry);
       const existing = this.#outpointIndex.get(key);
@@ -683,24 +686,23 @@ class NetworkStateManager extends EventEmitter {
       // snapshot comparison.
       if (!existing) return;
 
-      // The ip is an index key, so a move has to be re-keyed rather than overwritten
-      // in place.
-      const ipChanged = existing.ip !== entry.ip;
-      if (ipChanged) this.#deindexNode(existing);
-
-      existing.ip = entry.ip;
-      existing.tier = entry.tier;
-      existing.confirmed_height = entry.confirmedHeight;
-      existing.last_paid_height = entry.lastPaidHeight;
-      existing.pubkey = entry.pubkey;
-
-      if (ipChanged) this.#indexNode(existing);
+      const updated = {
+        ...existing,
+        ip: entry.ip,
+        tier: entry.tier,
+        confirmed_height: entry.confirmedHeight,
+        last_paid_height: entry.lastPaidHeight,
+        pubkey: entry.pubkey,
+      };
+      this.#deindexNode(existing);
+      this.#indexNode(updated);
+      replaced.set(key, updated);
     });
 
-    if (removedKeys.size) {
-      this.#state = this.#state.filter(
-        (node) => !removedKeys.has(NetworkStateManager.outpointKey(node)),
-      );
+    if (removedKeys.size || replaced.size) {
+      this.#state = this.#state
+        .filter((node) => !removedKeys.has(NetworkStateManager.outpointKey(node)))
+        .map((node) => replaced.get(NetworkStateManager.outpointKey(node)) ?? node);
     }
 
     added.forEach((node) => {
