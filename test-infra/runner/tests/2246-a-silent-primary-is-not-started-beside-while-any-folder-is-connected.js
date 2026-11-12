@@ -2,7 +2,9 @@
 import { describe, it, before, after } from 'mocha';
 import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
-import { crashFluxos, execInContainer, releaseFluxos, requireAppContainerName } from '../framework/container.js';
+import {
+  componentIdentifier, crashFluxos, execInContainer, releaseFluxos, requireAppContainerName,
+} from '../framework/container.js';
 import { pushTestApp } from '../framework/registry-helper.js';
 import { buildSeedableApp } from '../framework/seed-helper.js';
 import { bootAndPeer, installOnNodes } from '../framework/reconciler-suite.js';
@@ -33,7 +35,7 @@ describe('a silent primary is not started beside while any of its folders is con
   const appName = `e2egsilent${Date.now()}`;
   const COMPONENTS = ['db', 'web'];
   // The anchor: the first g: component, which keys the app's election records.
-  const identifier = `db_${appName}`;
+  let identifier;
   const PRIMARY = 0;
   const STANDBY = 1;
   const HOLDERS = [PRIMARY, STANDBY];
@@ -65,6 +67,7 @@ describe('a silent primary is not started beside while any of its folders is con
       pinnedTo: [PRIMARY, STANDBY],
       name: appName, instances: HOLDERS.length, compose: COMPONENTS.map((name) => gComponent(appName, name)),
     });
+    identifier = componentIdentifier(app, 'db');
     await installOnNodes(env, app, [PRIMARY]);
     await waitHolding(async () => (await oneHolderAtMost())[PRIMARY].length === COMPONENTS.length, {
       timeout: 300000, interval: 3000, label: 'the primary runs every g: component',

@@ -2,7 +2,9 @@
 import { describe, it, before, after } from 'mocha';
 import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
-import { crashFluxos, execInContainer, releaseFluxos, requireAppContainerName } from '../framework/container.js';
+import {
+  componentIdentifier, crashFluxos, execInContainer, releaseFluxos, requireAppContainerName,
+} from '../framework/container.js';
 import { pushTestApp } from '../framework/registry-helper.js';
 import { buildSeedableApp } from '../framework/seed-helper.js';
 import { bootAndPeer, installOnNodes, electionIndexOf } from '../framework/reconciler-suite.js';
@@ -36,7 +38,7 @@ describe('an owner stop and start keeps every g: component on the primary', func
   const appName = `e2egowner${Date.now()}`;
   const COMPONENTS = ['db', 'web'];
   // The anchor: the first g: component, which keys the app's election records.
-  const identifier = `db_${appName}`;
+  let identifier;
   // Placed in this order, so the election ranks them in it. A fourth node holds
   // nothing and keeps the discovery ring whole.
   const FIRST = 0;
@@ -92,6 +94,7 @@ describe('an owner stop and start keeps every g: component on the primary', func
       pinnedTo: [FIRST, ...HOLDERS.filter((h) => h !== FIRST)],
       name: appName, instances: HOLDERS.length, compose: COMPONENTS.map((name) => gComponent(appName, name)),
     });
+    identifier = componentIdentifier(app, 'db');
 
     // One at a time: a node learns of the app only when it is installed, so the
     // order is the placement order.
