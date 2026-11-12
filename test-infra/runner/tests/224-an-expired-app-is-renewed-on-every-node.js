@@ -4,9 +4,10 @@
  *
  * Two apps are registered with a short term and installed on chosen holders. One is renewed by
  * an update relayed while it runs and paid for after it has expired; the other by its owner,
- * submitting after it has expired. Every node holds both renewals: by promotion, after a
- * rebuild from its message log, and on a node that joins afterwards and learns them by hash
- * sync. The removal and the revived app's return show in both location stores.
+ * submitting after it has expired. Every node holds both renewals: by promotion, after its
+ * decider has decided its message log again at a restart, and on a node that joins afterwards
+ * and learns them by hash sync. The removal and the revived app's return show in the node's
+ * event log and in its location view.
  *
  * The chain moves only when this suite advances it: the ticker is stopped after boot, and
  * submissions are paid with queueAppTx and mined by driveFleetUntil. A node runs its expiry pass
@@ -20,8 +21,10 @@ import { nodeKey, fluxTeamKey } from '../framework/keys.js';
 import { authenticate } from '../auth.js';
 import { buildAppSpec, registerApp } from '../framework/app-helper.js';
 import { bootAndPeer } from '../framework/reconciler-suite.js';
+import { restartFluxos } from '../framework/container.js';
 import {
   waitFor, waitForDaemonReady, waitForBlockProcessed, waitForAppRemoved, waitForAppInstalled, waitForInstallSettled,
+  waitForBootSettled,
 } from '../framework/wait.js';
 import {
   advanceBlock, getState, queueAppTx, stopTicker,
@@ -36,7 +39,7 @@ const subnet = getSubnetConfig();
 // submission needs. Index 0's backward arc wraps onto the held-back slot, so nothing is
 // submitted through it or asserted on it alone.
 const SUBMITTER = 2; // takes submissions; holds neither app
-const OBSERVER = 1; // reads the location stores, and rebuilds its app list
+const OBSERVER = 1; // reads the event log and the location view, and decides its log again
 const HOLDER_LATE = 3;
 const HOLDER_OWNER = 4;
 const JOINER = 5;
@@ -108,17 +111,17 @@ describe('an expired app is renewed by an update, on every node alike', function
     await waitForInstallSettled(client, name, 120000, { afterId: mark });
   };
   // The holder's app:removed, then within 30 s the observer's appremoved event from that holder
-  // and no location row for it there. Both stores expire their rows 63 s after the last
-  // announce, so the 30 s window is what makes "gone" mean removed.
+  // and no location of it in the observer's view. A location lapses at the location TTL after the
+  // last announce, so the 30 s window is what makes "gone" mean removed.
   const observeRemoval = async (holder, name, mark) => {
     await waitForAppRemoved(env.clients[holder], name, 600000, { afterId: mark });
     const observer = dbClient(OBSERVER + 1);
     await waitFor(async () => {
       const removed = await observer.appStateEvents({ type: 'appremoved', 'data.appName': name });
-      const rows = await observer.getAppLocations(name);
+      const rows = await env.clients[OBSERVER].appLocationRows(name);
       return removed.some((e) => ipOf(e.ip) === holderIp(holder))
         && !rows.some((r) => ipOf(r.ip) === holderIp(holder));
-    }, { timeout: 30000, interval: 1000, label: `${name}'s removal on node ${holder} in both location stores of node ${OBSERVER}` });
+    }, { timeout: 30000, interval: 1000, label: `${name}'s removal on node ${holder} in the event log and location view of node ${OBSERVER}` });
   };
 
   before(async function () {
@@ -170,7 +173,7 @@ describe('an expired app is renewed by an update, on every node alike', function
     await env?.teardown();
   });
 
-  it('records each expired app\'s removal in both location stores', async function () {
+  it('records each expired app\'s removal in the event log and the location view', async function () {
     this.timeout(60000);
     const error = await removal;
     if (error) throw error;
@@ -191,22 +194,30 @@ describe('an expired app is renewed by an update, on every node alike', function
     await driveFleetUntil(async () => (await hashes(ownerName)).every((h) => h === ownerRenewalHash), { blocks: 12, label: `${ownerName} renewed on every node` });
   });
 
-  it('holds the same renewals after rebuilding its app list from its message log', async function () {
-    this.timeout(180000);
+  it('holds the same renewals after its decider decides its message log again at a restart', async function () {
+    this.timeout(480000);
     expect(lateRenewalHash, 'the late renewal was applied').to.be.a('string');
     expect(ownerRenewalHash, 'the owner\'s renewal was applied').to.be.a('string');
     const db = dbClient(OBSERVER + 1);
-    // Canary: the node is put back to the registrations, so only the rebuild can restore the
-    // renewals.
-    await db.replaceGlobalAppSpec(registered.late);
-    await db.replaceGlobalAppSpec(registered.owner);
-    expect(await specHash(OBSERVER, lateName)).to.equal(registered.late.hash);
-
     const client = env.clients[OBSERVER];
-    const res = await client.reindexGlobalApps(client.zelidauth);
-    expect(res.status, JSON.stringify(res)).to.equal('success');
+    // Canary: the node holds no decision on either renewal, so only the decider's pass over
+    // its message log at boot decides them again.
+    await db.removeDecision(lateRenewalHash);
+    await db.removeDecision(ownerRenewalHash);
+    expect(await db.decision(lateRenewalHash)).to.equal(null);
+    expect(await db.decision(ownerRenewalHash)).to.equal(null);
+
+    const afterId = client.getLastEventId();
+    await restartFluxos(client.container);
+    await waitForBootSettled(client, 180000, { afterId });
+    await waitFor(async () => (await db.decision(lateRenewalHash)) !== null && (await db.decision(ownerRenewalHash)) !== null, {
+      timeout: 360000, interval: 3000, label: 'the observer decided both renewals again',
+    });
+    expect(await db.decision(lateRenewalHash)).to.include({ decision: 'applied' });
+    expect(await db.decision(ownerRenewalHash)).to.include({ decision: 'applied' });
     expect(await specHash(OBSERVER, lateName)).to.equal(lateRenewalHash);
     expect(await specHash(OBSERVER, ownerName)).to.equal(ownerRenewalHash);
+    await env.startDiscovery([OBSERVER]);
   });
 
   it('holds the same renewals on a node that joins afterwards and syncs them in bulk', async function () {
@@ -221,7 +232,7 @@ describe('an expired app is renewed by an update, on every node alike', function
       && await specHash(JOINER, ownerName) === ownerRenewalHash, { timeoutMs: 300000, label: 'the joining node holds both renewals' });
   });
 
-  it('announces the revived app in both location stores', async function () {
+  it('announces the revived app in the event log and the location view', async function () {
     this.timeout(300000);
     expect(installMarks, 'the late renewal was paid').to.be.an('array');
     // The spawner places the revived app on its timer, anywhere it fits.
@@ -232,11 +243,11 @@ describe('an expired app is renewed by an update, on every node alike', function
     const since = Date.now() - 60000;
     await waitFor(async () => {
       const db = dbClient(observer + 1);
-      const rows = await db.getAppLocations(lateName);
+      const rows = await env.clients[observer].appLocationRows(lateName);
       const running = await db.appStateEvents({ type: 'apprunning' });
       return rows.some((r) => ipOf(r.ip) === holderIp(holder))
         && running.some((e) => ipOf(e.ip) === holderIp(holder) && new Date(e.broadcastedAt).getTime() > since
           && (e.data?.apps ?? []).some((a) => a.name === lateName));
-    }, { timeout: 90000, interval: 2000, label: `node ${holder}'s ${lateName} in both location stores of node ${observer}` });
+    }, { timeout: 90000, interval: 2000, label: `node ${holder}'s ${lateName} in the event log and location view of node ${observer}` });
   });
 });

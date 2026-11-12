@@ -726,8 +726,6 @@ export function nodeClient(nodeNum) {
     getPermanentMessages: () => get('/apps/permanentmessages'),
     getTempMessages: (hash) => get(`/apps/temporarymessages/${hash}`),
     getAppSpecs: (name) => get(`/apps/appspecifications/${name}`),
-    // Rebuilds the global app list from this node's message log (node operator or Flux team).
-    reindexGlobalApps: (zelidauth) => getAuthed('/apps/reindexglobalappsinformation', zelidauth),
     // `noCache` reads the installed apps now, past the route's cache.
     getInstalledApps: ({ noCache = false } = {}) => get('/apps/installedapps', { noCache }),
     getRunningApps: () => get('/apps/runningapps'),
