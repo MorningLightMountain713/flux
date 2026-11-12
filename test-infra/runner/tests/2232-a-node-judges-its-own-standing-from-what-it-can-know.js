@@ -243,9 +243,10 @@ describe('a node judges its own standing from what it can know', function () {
       const own = list.find((entry) => String(entry.ip).split(':')[0] === ipOf(COLLIDES));
       const second = { ...own, ip: `${ipOf(STUB_PEER)}:16127` };
 
+      // A collateral is listed once: at the second address, in place of the node's own.
       const anchor = node.getLastEventId();
-      await setNodeList([...list, second]);
-      await node.waitForEvent('networkstate:updated', (d) => d.nodes === list.length + 1, 120000, { afterId: anchor });
+      await setNodeList(list.map((entry) => (entry === own ? second : entry)));
+      await node.waitForEvent('daemon:deltaApplied', (d) => d.updated >= 1, 120000, { afterId: anchor });
       const refreshedAt = Date.now();
       await waitFor(async () => (await dosOf(node)).dosState >= 100, {
         timeout: 90000, interval: 500, label: 'the node out of service for the collision',
