@@ -1,17 +1,21 @@
 // fleet: 3
 /*
- * A hard redeploy whose removal cannot delete the app's row stops with the app part
- * removed: its containers and volume are gone, its row is not. The node holds it as
- * departing - never announced - and runs the removal again until it finishes, then
- * tells the network it no longer holds the app.
+ * A removal marks the app's record owed before it tears anything down, and deletes the
+ * record last. When the database refuses that delete, the removal stops with the app
+ * part removed: its containers and volume are gone, its record is not. The node holds
+ * it owed - never announced - and the reconciler runs the teardown again until the
+ * delete goes through, then tells the network it no longer holds the app.
  *
- * The node's deletes of the row are refused REFUSED times: the redeploy's removal and
- * the next runs of it, so the app is held across at least one announcement. A second
- * app on the node is in every announcement, which shows announcements went out.
+ * The removal is the node operator's own, of the app on this node. The node's deletes
+ * of the record are refused REFUSED times: the removal's and the reconciler's next
+ * runs of it, so the app is held across at least one announcement. A second app on
+ * the node is in every announcement, which shows announcements went out.
  *
- * While the app is held, nothing installs it: the removal that finishes it would take
- * whatever held its name. A second hard redeploy, sent before the removal runs again,
- * removes the app and is refused the install.
+ * While the app is held, nothing installs it: the teardown that finishes it would take
+ * whatever held its name. An install sent while the app is owed is refused.
+ *
+ * The node's own spawner is held for the app throughout, so the app it removed is not
+ * placed on it again.
  */
 import { describe, it, before, after } from 'mocha';
 import { expect } from 'chai';
@@ -19,21 +23,30 @@ import { createTestEnv } from '../framework/test-env.js';
 import { pushImage } from '../framework/registry-helper.js';
 import { buildSeedableApp } from '../framework/seed-helper.js';
 import { REGISTRY_REPO_HOST } from '../framework/subnet-config.js';
-import { bootAndPeer, installOnNodes } from '../framework/reconciler-suite.js';
+import { bootAndPeer, holdSpawnerExcept, installOnNodes } from '../framework/reconciler-suite.js';
 import { getAppContainerId } from '../framework/container.js';
 import { waitFor } from '../framework/wait.js';
 import { failCommands } from '../framework/mongo-control.js';
 import { authenticate } from '../auth.js';
-import { appOwnerKey } from '../framework/keys.js';
+import { fluxTeamKey } from '../framework/keys.js';
 import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 
 const HOLDER = 0;
-// each run of the removal waits 15s after the last, and the node announces every ~30s
-const REFUSED = 4;
+// The removal, and the reconciler's runs of the teardown 5 s and 30 s after it
+// (appReconciler REMOVAL_BACKOFF_MS); the next run, 5 min on, goes through. The
+// node announces every 86 s, so the app is held across at least one announcement.
+const REFUSED = 3;
+const FINISHED_MS = (5 + 30 + 300 + 120) * 1000;
 
 function step(what) {
   console.log(`# 3309 ${new Date().toISOString()} ${what}`);
 }
+
+const removeHere = async (client, appName) => {
+  const auth = await authenticate(client.url, fluxTeamKey());
+  const res = await fetch(`${client.url}/apps/appremove/${appName}`, { headers: { zelidauth: auth.zelidauth } });
+  return res.text();
+};
 
 const component = (name) => ({
   name,
@@ -80,14 +93,14 @@ describe('a removal that stops part way is finished', function () {
       timeout: 120000, interval: 2000, label: 'both apps run before the redeploy',
     });
 
-    const auth = await authenticate(holder.url, appOwnerKey());
-    release = await failCommands(HOLDER + 1, 'localzelapps', 'zelappsinformation', { commands: ['findAndModify'], times: REFUSED });
-    step(`hard redeploy with the row delete refused ${REFUSED} times`);
-    const body = await holder.redeployApp(appName, auth.zelidauth, { force: true });
-    if (/Unauthorized/i.test(body)) throw new Error(`hard redeploy refused: ${body.slice(0, 400)}`);
+    await holdSpawnerExcept(env, appName, []);
+    release = await failCommands(HOLDER + 1, 'localzelapps', 'zelappsinformation', { commands: ['delete'], times: REFUSED });
     anchors = env.clients.map((client) => client?.getLastEventId());
     failedAt = holder.getLastEventId();
-    step('redeploy returned');
+    step(`removal with the record delete refused ${REFUSED} times`);
+    const body = await removeHere(holder, appName);
+    if (/Unauthorized/i.test(body)) throw new Error(`removal refused: ${body.slice(0, 400)}`);
+    step('removal returned');
   });
 
   after(async function () {
@@ -97,13 +110,13 @@ describe('a removal that stops part way is finished', function () {
   });
 
   it('no longer holds the app once its removal finishes', async function () {
-    this.timeout(240000);
+    this.timeout(FINISHED_MS + 30000);
     await waitFor(async () => (await holds(appName)) === false, {
-      timeout: 210000, interval: 2000, label: 'the node no longer holds the app',
+      timeout: FINISHED_MS, interval: 2000, label: 'the node no longer holds the app',
     });
   });
 
-  it('had its deletes of the app\'s row refused by the database', async function () {
+  it('had its deletes of the app\'s record refused by the database', async function () {
     const failed = await release();
     release = null;
     expect(failed, 'the database refused none of the node\'s row deletes, so nothing here was tested').to.be.at.least(1);
@@ -156,17 +169,18 @@ describe('an app whose removal is pending takes no install', function () {
       timeout: 120000, interval: 2000, label: 'the app runs before the redeploys',
     });
 
-    const auth = await authenticate(holder.url, appOwnerKey());
-    release = await failCommands(HOLDER + 1, 'localzelapps', 'zelappsinformation', { commands: ['findAndModify'], times: 1 });
-    step('hard redeploy with the row delete refused once');
-    const first = await holder.redeployApp(appName, auth.zelidauth, { force: true });
-    if (/Unauthorized/i.test(first)) throw new Error(`hard redeploy refused: ${first.slice(0, 400)}`);
+    await holdSpawnerExcept(env, appName, []);
+    release = await failCommands(HOLDER + 1, 'localzelapps', 'zelappsinformation', { commands: ['delete'], times: 1 });
+    step('removal with the record delete refused once');
+    const removed = await removeHere(holder, appName);
+    if (/Unauthorized/i.test(removed)) throw new Error(`removal refused: ${removed.slice(0, 400)}`);
     failedDeletes = await release();
     release = null;
     afterFailure = holder.getLastEventId();
-    step('second hard redeploy while the app is held');
-    await holder.redeployApp(appName, auth.zelidauth, { force: true });
-    step('second redeploy returned');
+    step('install while the app is owed');
+    const auth = await authenticate(holder.url, fluxTeamKey());
+    await holder.installAppLocally(appName, auth.zelidauth);
+    step('install returned');
   });
 
   after(async function () {
@@ -175,7 +189,7 @@ describe('an app whose removal is pending takes no install', function () {
     await env?.teardown();
   });
 
-  it('had its delete of the app\'s row refused by the database', function () {
+  it('had its delete of the app\'s record refused by the database', function () {
     expect(failedDeletes, 'the database refused none of the node\'s row deletes, so nothing here was tested').to.equal(1);
   });
 
