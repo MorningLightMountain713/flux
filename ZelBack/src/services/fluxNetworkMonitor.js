@@ -802,40 +802,53 @@ async function checkDeterministicNodesCollisions() {
         const ownRecord = nodeCollateralDifferentIp ? await ownAddressRepository.read() : null;
         const movedFromHere = Boolean(ownRecord?.movedFrom) && socketAddressesMatch(ownRecord.movedFrom, nodeCollateralDifferentIp?.ip);
         // Listed nowhere it should not be: whatever this check said no longer holds.
-        if (!nodeCollateralDifferentIp || movedFromHere) nodeDosState.releaseDosOwnedBy(isCollisionMessage);
+        if (!nodeCollateralDifferentIp || movedFromHere) {
+          nodeDosState.releaseDosOwnedBy(isCollisionMessage);
+          unansweredCollateral = null;
+        }
         if (nodeStatus.status === 'CONFIRMED' && nodeCollateralDifferentIp && !movedFromHere) {
-          const askingIP = extractIp(nodeCollateralDifferentIp.ip);
-          const askingIpPort = extractPort(nodeCollateralDifferentIp.ip);
+          const otherAddress = normalizeSocketAddress(nodeCollateralDifferentIp.ip);
+          const askingIP = extractIp(otherAddress);
+          const askingIpPort = extractPort(otherAddress);
           log.info(`Detected same collateral on different IP: ${askingIP}:${askingIpPort}. Checking if other node is reachable...`);
 
-          if (await fluxAnswersAt(nodeCollateralDifferentIp.ip)) {
+          if (await fluxAnswersAt(otherAddress)) {
             // Other node is reachable and confirmed - this is a collision
+            unansweredCollateral = null;
             log.error(`Flux collision detection. Node at ${askingIP}:${askingIpPort} is confirmed and reachable on flux network with the same collateral transaction information.`);
             nodeDosState.setDosStateValue(100);
             nodeDosState.setDosMessage(`Flux collision detection. Node at ${askingIP}:${askingIpPort} is confirmed and reachable on flux network with the same collateral transaction information.`);
             return;
           }
 
-          // First check failed - wait 60 seconds before confirming the other node is truly offline
-          // This grace period prevents false positives from temporary network issues or node restarts
-          log.info(`Other node at ${askingIP}:${askingIpPort} appears unreachable. Waiting 60 seconds to verify before taking over...`);
-          await serviceHelper.delay(ANSWER_GRACE_MS);
-          const answersHere = await fluxAnswersAt(nodeCollateralDifferentIp.ip);
-          const peersFind = answersHere ? null : await peersFindAt(nodeCollateralDifferentIp.ip);
+          // A node that does not answer is given ANSWER_GRACE_MS to come back - a
+          // restart - and judged by a later pass that finds the list showing the
+          // collateral at the same address, still unanswered.
+          const now = Date.now();
+          if (unansweredCollateral?.address !== otherAddress) {
+            unansweredCollateral = { address: otherAddress, since: now };
+            log.info(`Other node at ${askingIP}:${askingIpPort} appears unreachable. Judged once it has stayed so for ${ANSWER_GRACE_MS / 1000} seconds`);
+            return;
+          }
+          if (now - unansweredCollateral.since < ANSWER_GRACE_MS) return;
+
+          const peersFind = await peersFindAt(otherAddress);
           const gone = peersFind === PeerFinding.NOTHING;
           fluxEventBus.publish('collision:judged', {
-            address: normalizeSocketAddress(nodeCollateralDifferentIp.ip), answersHere, peersFind, gone,
+            address: otherAddress, answersHere: false, peersFind, gone,
           });
           // The collateral listed at the IP this node last knew as its own, and nothing
           // answering there: not another machine, but this node, which has moved and
           // has no record of where it was. Handled as the move it is, recorded and told
           // to the network before the new address is confirmed.
           if (gone && askingIP === await nodeIdentityRepository.getLastKnownIp()) {
-            const formerSocket = normalizeSocketAddress(`${askingIP}:${askingIpPort}`);
-            log.info(`Our collateral is listed at ${formerSocket}, this node's own former address - handling the move to ${localSocketAddr}`);
-            await leaveConfiguredAddress(formerSocket, localSocketAddr);
+            log.info(`Our collateral is listed at ${otherAddress}, this node's own former address - handling the move to ${localSocketAddr}`);
+            await leaveConfiguredAddress(otherAddress, localSocketAddr);
           } else if (gone) {
-            // Other node is confirmed offline after grace period - take over the collateral
+            // Other node is confirmed offline after grace period - take over the collateral.
+            // A confirmation not yet mined is asked for again only once the grace has
+            // run again.
+            unansweredCollateral = { address: otherAddress, since: now };
             log.info(`Other node at ${askingIP}:${askingIpPort} confirmed offline. Creating confirmation transaction to take over collateral...`);
             const daemonResult = await daemonServiceFluxnodeRpcs.createConfirmationTransaction();
             log.info(`node was confirmed on a different machine ip - createConfirmationTransaction: ${JSON.stringify(daemonResult)}`);
@@ -843,8 +856,8 @@ async function checkDeterministicNodesCollisions() {
           } else if (peersFind === PeerFinding.UNKNOWN) {
             log.info(`Whether the node at ${askingIP}:${askingIpPort} is gone cannot be said yet; the next pass asks again`);
           } else {
-            // Answering again after the grace, or reached by peers: the other node is
-            // there, so this is a collision.
+            // Reached by peers: the other node is there, so this is a collision.
+            unansweredCollateral = null;
             log.error(`Flux collision detection. Node at ${askingIP}:${askingIpPort} is confirmed and reachable on flux network with the same collateral transaction information.`);
             nodeDosState.setDosStateValue(100);
             nodeDosState.setDosMessage(`Flux collision detection. Node at ${askingIP}:${askingIpPort} is confirmed and reachable on flux network with the same collateral transaction information.`);
@@ -856,6 +869,10 @@ async function checkDeterministicNodesCollisions() {
     log.error(error);
   }
 }
+
+// The address a collision pass last found holding this node's collateral and not
+// answering, and when it first did.
+let unansweredCollateral = null;
 
 // The collision check runs one pass at a time; a trigger arriving during a pass
 // asks for one more pass after it.
@@ -1109,10 +1126,11 @@ function startOwnStandingWatch() {
 function resetForTests() {
   maxNumberOfIpChanges = 0;
   tooManyIpChangesAt = null;
-  maxNumberOfIpChanges = 0;
+  unansweredCollateral = null;
 }
 
 module.exports = {
+  ANSWER_GRACE_MS,
   resetForTests,
   setOnAddressChanged,
   ipChangesOverLimit,

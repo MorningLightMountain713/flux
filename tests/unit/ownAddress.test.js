@@ -575,8 +575,18 @@ describe('fluxNetworkHelper own address tests', () => {
   });
 
   describe('the collision check', () => {
+    let clock;
+    // A pass that finds nothing answering at the listed address, and the pass that
+    // judges it once the grace has run.
+    const passesAcrossTheGrace = async () => {
+      await fluxNetworkMonitor.checkDeterministicNodesCollisions();
+      clock.tick(fluxNetworkMonitor.ANSWER_GRACE_MS);
+      await fluxNetworkMonitor.checkDeterministicNodesCollisions();
+    };
+
     beforeEach(() => {
-      sinon.useFakeTimers({ toFake: ['setTimeout'], shouldAdvanceTime: true });
+      fluxNetworkMonitor.resetForTests();
+      clock = sinon.useFakeTimers({ toFake: ['setTimeout', 'Date'], shouldAdvanceTime: true });
       sinon.stub(daemonStatus, 'daemonSyncState').returns({ synced: true });
       sinon.stub(networkStateService, 'isReady').returns(true);
       sinon.stub(nodeConfirmationService, 'isDaemonReachable').returns(true);
@@ -606,7 +616,7 @@ describe('fluxNetworkHelper own address tests', () => {
       collateralListedAt('198.51.100.9:16127', '198.51.100.9:16157');
       listedHere.withArgs('198.51.100.9:16127').resolves(['ranthere']);
 
-      await fluxNetworkMonitor.checkDeterministicNodesCollisions();
+      await passesAcrossTheGrace();
 
       sinon.assert.calledOnceWithExactly(moved, '198.51.100.9:16127', '198.51.100.9:16157', sinon.match.number);
       expect(await record()).to.deep.equal({ socketAddress: '198.51.100.9:16157', movedFrom: '198.51.100.9:16127' });
@@ -617,7 +627,7 @@ describe('fluxNetworkHelper own address tests', () => {
       collateralListedAt('198.51.100.92:16127', '198.51.100.93:16127');
       listedHere.rejects(new Error('db down'));
 
-      await fluxNetworkMonitor.checkDeterministicNodesCollisions();
+      await passesAcrossTheGrace();
 
       sinon.assert.notCalled(moved);
       sinon.assert.notCalled(nodeIdentityRepository.setLastKnownIp);
@@ -629,7 +639,7 @@ describe('fluxNetworkHelper own address tests', () => {
       configure('198.51.100.25');
       collateralListedAt('198.51.100.25:16127', '198.51.100.26:16127');
 
-      await fluxNetworkMonitor.checkDeterministicNodesCollisions();
+      await passesAcrossTheGrace();
 
       sinon.assert.notCalled(moved);
       sinon.assert.calledOnce(daemonServiceFluxnodeRpcs.createConfirmationTransaction);
@@ -642,7 +652,7 @@ describe('fluxNetworkHelper own address tests', () => {
       await adopt('198.51.100.32:16127');
       collateralListedAt('198.51.100.31:16127', '198.51.100.32:16127');
 
-      await fluxNetworkMonitor.checkDeterministicNodesCollisions();
+      await passesAcrossTheGrace();
 
       sinon.assert.notCalled(moved);
       sinon.assert.calledOnce(daemonServiceFluxnodeRpcs.createConfirmationTransaction);
@@ -655,7 +665,7 @@ describe('fluxNetworkHelper own address tests', () => {
       collateralListedAt('198.51.100.28:16127', '198.51.100.27:16127');
       listedHere.resolves(['ranthere']);
 
-      await fluxNetworkMonitor.checkDeterministicNodesCollisions();
+      await passesAcrossTheGrace();
 
       sinon.assert.notCalled(moved);
       sinon.assert.calledOnce(daemonServiceFluxnodeRpcs.createConfirmationTransaction);

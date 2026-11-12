@@ -326,8 +326,17 @@ describe('fluxNetworkMonitor tests', () => {
 
     const versionAsks = (axiosGetStub) => axiosGetStub.getCalls().filter((call) => String(call.args[0]).endsWith('/flux/version'));
     const peersAnswer = (axiosGetStub) => axiosGetStub.withArgs(sinon.match(/\/flux\/checkfluxavailability/));
+    let clock;
+    // A pass that finds the other node unanswered, and the pass that judges it once
+    // the grace has run.
+    const passesAcrossTheGrace = async () => {
+      await fluxNetworkMonitor.checkDeterministicNodesCollisions();
+      clock.tick(fluxNetworkMonitor.ANSWER_GRACE_MS);
+      await fluxNetworkMonitor.checkDeterministicNodesCollisions();
+    };
 
     beforeEach(() => {
+      fluxNetworkMonitor.resetForTests();
       let drawn = 0;
       sinon.stub(networkStateService, 'getRandomExternalObserver').callsFake(async () => {
         drawn += 1;
@@ -339,7 +348,7 @@ describe('fluxNetworkMonitor tests', () => {
       // the no-real-network guard reports against whichever unrelated test happened to
       // be running minutes later. Faking the clock for the whole block is what stops a
       // re-arm ever escaping; sinon.restore() in afterEach takes it away again.
-      sinon.useFakeTimers();
+      clock = sinon.useFakeTimers();
       fluxNetworkHelper.setStoredFluxBenchAllowed('6.2.0');
       fluxNetworkHelper.setLocalSocketAddress('129.3.3.3');
       sinon.stub(daemonServiceFluxnodeRpcs, 'createConfirmationTransaction').returns(true);
@@ -648,7 +657,7 @@ describe('fluxNetworkMonitor tests', () => {
       const axiosGetStub = serviceHelper.axiosGet.rejects(new Error('Connection refused'));
       peersAnswer(axiosGetStub).resolves({ data: { status: 'error' } });
 
-      await fluxNetworkMonitor.checkDeterministicNodesCollisions();
+      await passesAcrossTheGrace();
 
       expect(versionAsks(axiosGetStub)).to.have.lengthOf(2);
       sinon.assert.calledOnce(daemonServiceFluxnodeRpcs.createConfirmationTransaction);
@@ -713,7 +722,7 @@ describe('fluxNetworkMonitor tests', () => {
       axiosGetStub.onFirstCall().rejects(new Error('Connection refused'));
       axiosGetStub.onSecondCall().resolves({ data: { version: '6.0.0' } });
 
-      await fluxNetworkMonitor.checkDeterministicNodesCollisions();
+      await passesAcrossTheGrace();
 
       expect(axiosGetStub.calledTwice).to.be.true;
       sinon.assert.notCalled(daemonServiceFluxnodeRpcs.createConfirmationTransaction);
@@ -739,7 +748,7 @@ describe('fluxNetworkMonitor tests', () => {
         peerAsks.onFirstCall().resolves({ data: { status: 'error' } });
         peerAsks.onSecondCall().resolves({ data: { status: 'success' } });
 
-        await fluxNetworkMonitor.checkDeterministicNodesCollisions();
+        await passesAcrossTheGrace();
 
         expect(versionAsks(axiosGetStub), 'fixture: it could not reach the other node itself').to.have.lengthOf(2);
         sinon.assert.notCalled(daemonServiceFluxnodeRpcs.createConfirmationTransaction);
@@ -750,14 +759,14 @@ describe('fluxNetworkMonitor tests', () => {
         peerAsks.resolves({ data: { status: 'error' } });
         peerAsks.onFirstCall().resolves({ data: { status: 'success' } });
 
-        await fluxNetworkMonitor.checkDeterministicNodesCollisions();
+        await passesAcrossTheGrace();
 
         sinon.assert.notCalled(daemonServiceFluxnodeRpcs.createConfirmationTransaction);
         expect(nodeDosState.getDosStateValue()).to.equal(100);
       });
 
       it('takes nothing over while too few peers answer whether the other node is there', async () => {
-        await fluxNetworkMonitor.checkDeterministicNodesCollisions();
+        await passesAcrossTheGrace();
 
         expect(peerAsks.callCount, 'every peer drawn was asked').to.equal(5);
         sinon.assert.notCalled(daemonServiceFluxnodeRpcs.createConfirmationTransaction);
@@ -767,10 +776,48 @@ describe('fluxNetworkMonitor tests', () => {
       it('takes nothing over while the peers asked do not list the other node', async () => {
         peerAsks.resolves({ data: { status: 'error', data: { message: fluxNetworkHelper.NOT_LISTED_MESSAGE } } });
 
-        await fluxNetworkMonitor.checkDeterministicNodesCollisions();
+        await passesAcrossTheGrace();
 
         sinon.assert.notCalled(daemonServiceFluxnodeRpcs.createConfirmationTransaction);
         expect(nodeDosState.getDosStateValue(), 'a peer that has not looked finds nothing either way').to.equal(0);
+      });
+
+      it('judges nothing before the grace has run', async () => {
+        peerAsks.resolves({ data: { status: 'error' } });
+
+        await fluxNetworkMonitor.checkDeterministicNodesCollisions();
+        clock.tick(fluxNetworkMonitor.ANSWER_GRACE_MS - 1);
+        await fluxNetworkMonitor.checkDeterministicNodesCollisions();
+
+        sinon.assert.notCalled(peerAsks);
+        sinon.assert.notCalled(daemonServiceFluxnodeRpcs.createConfirmationTransaction);
+        expect(nodeDosState.getDosStateValue()).to.equal(0);
+      });
+
+      it('judges the list as it stands at the judging pass: the collateral now listed here is no collision', async () => {
+        peerAsks.resolves({ data: { status: 'error' } });
+
+        await fluxNetworkMonitor.checkDeterministicNodesCollisions();
+        deterministicFluxListStub.returns([{ ...deterministicFluxnodeListResponse[0], collateral, ip: '192.168.1.101:16127' }]);
+        clock.tick(fluxNetworkMonitor.ANSWER_GRACE_MS);
+        await fluxNetworkMonitor.checkDeterministicNodesCollisions();
+
+        expect(versionAsks(axiosGetStub).map((call) => call.args[0]), 'this node never asks its own address')
+          .to.deep.equal(['http://192.168.1.201:16127/flux/version']);
+        sinon.assert.notCalled(daemonServiceFluxnodeRpcs.createConfirmationTransaction);
+        expect(nodeDosState.getDosStateValue()).to.equal(0);
+      });
+
+      it('asks for the confirmation again only once the grace has run again', async () => {
+        peerAsks.resolves({ data: { status: 'error' } });
+
+        await passesAcrossTheGrace();
+        await fluxNetworkMonitor.checkDeterministicNodesCollisions();
+        sinon.assert.calledOnce(daemonServiceFluxnodeRpcs.createConfirmationTransaction);
+
+        clock.tick(fluxNetworkMonitor.ANSWER_GRACE_MS);
+        await fluxNetworkMonitor.checkDeterministicNodesCollisions();
+        sinon.assert.calledTwice(daemonServiceFluxnodeRpcs.createConfirmationTransaction);
       });
     });
   });
