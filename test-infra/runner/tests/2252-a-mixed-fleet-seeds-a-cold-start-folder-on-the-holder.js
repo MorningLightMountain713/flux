@@ -90,8 +90,9 @@ describe('a mixed fleet seeds a cold-start folder on the holder', function () {
     await env.clients[UNMEASURED].holdCheckpoint(BEFORE_HOLDINGS, folder);
     const from = env.clients[UNMEASURED].getLastEventId();
     try {
-      step('installing on all three holders, the third held before it measures the folder');
-      await placeInOrder(env, spec, HOLDERS);
+      step('installing on the three holders, the address-order winner last, the third held before it measures the folder');
+      // The address-order winner last, so every holder exists when it decides.
+      await placeInOrder(env, spec, [DATA_HOLDER, UNMEASURED, ADDRESS_WINNER]);
       parked = Boolean(await env.clients[UNMEASURED].waitForEvent(
         'checkpoint:held', (d) => d.name === BEFORE_HOLDINGS && d.key === folder, 120000, { afterId: from },
       ).catch(() => null));
