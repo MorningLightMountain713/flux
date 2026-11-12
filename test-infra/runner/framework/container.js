@@ -180,6 +180,30 @@ const LABEL_COMPONENT = 'io.runonflux.component';
 const LABEL_REPLICA = 'io.runonflux.replica';
 const LABEL_IDENTIFIER = 'io.runonflux.identifier';
 const LABEL_IDENTITY = 'io.runonflux.identity';
+// A release before v9 stamps the app and component under these keys.
+const RELEASE_LABEL_APP = 'runonflux.app';
+const RELEASE_LABEL_COMPONENT = 'runonflux.component';
+
+/**
+ * The app containers `docker ps --format` listed, one per line in listAppContainers'
+ * field order. A container made by a release before v9 carries its app and
+ * component under that release's label keys.
+ * @param {string} stdout
+ * @returns {Array<{name: string, status: string, image: string, app: string|null,
+ *   component: string|null, replica: string|null, identifier: string|null, identity: string|null}>}
+ */
+export function parseAppContainers(stdout) {
+  return stdout.trim().split('\n')
+    .filter((line) => line && !line.includes('NAMES'))
+    .map((line) => {
+      const [name, status, image, app, component, replica, identifier, identity, releaseApp, releaseComponent] = line.split('\t');
+      return {
+        name, status, image, app: app || releaseApp || null, component: component || releaseComponent || null,
+        replica: replica || null, identifier: identifier || null, identity: identity || null,
+      };
+    })
+    .filter((c) => c.name);
+}
 
 // THE READ CAN FAIL, AND SAYS SO. `2>/dev/null || echo ""` gave a broken docker
 // exec the same answer as a node with no containers on it - an empty list - so
@@ -193,23 +217,15 @@ export async function listAppContainers(container, { all = false } = {}) {
   const fields = ['{{.Names}}', '{{.Status}}', '{{.Image}}',
     `{{.Label "${LABEL_APP}"}}`, `{{.Label "${LABEL_COMPONENT}"}}`,
     `{{.Label "${LABEL_REPLICA}"}}`, `{{.Label "${LABEL_IDENTIFIER}"}}`,
-    `{{.Label "${LABEL_IDENTITY}"}}`].join('\t');
+    `{{.Label "${LABEL_IDENTITY}"}}`,
+    `{{.Label "${RELEASE_LABEL_APP}"}}`, `{{.Label "${RELEASE_LABEL_COMPONENT}"}}`].join('\t');
   const { stdout, stderr, exitCode } = await execInContainer(container,
     `docker ps${flag} --format '${fields}'`,
   );
   if (exitCode !== 0) {
     throw new Error(`docker ps in the node container failed (exit ${exitCode}): ${(stderr || stdout || '').trim()}`);
   }
-  return stdout.trim().split('\n')
-    .filter((line) => line && !line.includes('NAMES'))
-    .map((line) => {
-      const [name, status, image, app, component, replica, identifier, identity] = line.split('\t');
-      return {
-        name, status, image, app: app || null, component: component || null,
-        replica: replica || null, identifier: identifier || null, identity: identity || null,
-      };
-    })
-    .filter((c) => c.name);
+  return parseAppContainers(stdout);
 }
 
 // A bare app name matches every identity of that app; naming a replica narrows to
