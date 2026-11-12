@@ -176,7 +176,7 @@ function nodeBySourceIp(sourceIp) {
   // in the confirmed list, and skips the availability check that would have told it
   // what happened.
   for (const [realIp, override] of reportedAddresses) {
-    if (String(override.reported).split(':')[0] === clean) {
+    if (override.scope !== 'list' && String(override.reported).split(':')[0] === clean) {
       return deterministicNodeList.find((n) => n.ip.split(':')[0] === realIp) || null;
     }
   }
@@ -251,11 +251,11 @@ function benchmarkAddressOf(node) {
   return o && (o.scope === 'all' || o.scope === 'benchmark') ? o.reported : node.ip;
 }
 
-// What benchmark's public-IP probe answers, which moves under either scope.
+// What benchmark's public-IP probe answers, which moves under every scope but `list`.
 function publicIpAnswerFor(node) {
   if (!node) return null;
   const o = overrideFor(node);
-  return (o ? o.reported : node.ip).split(':')[0];
+  return (o && o.scope !== 'list' ? o.reported : node.ip).split(':')[0];
 }
 
 // Nodes hidden from their PEERS' view of the network, but never from their own.
@@ -293,7 +293,7 @@ function publishReported(list) {
   if (!reportedAddresses.size) return list;
   return list.map((n) => {
     const o = reportedAddresses.get(n.ip.split(':')[0]);
-    return o && o.scope === 'all' ? { ...n, ip: o.reported } : n;
+    return o && (o.scope === 'all' || o.scope === 'list') ? { ...n, ip: o.reported } : n;
   });
 }
 
@@ -1351,6 +1351,9 @@ control.post('/set-node-list', (req, res) => {
 // address moves and before the chain has caught up. As fluxbench does, the first
 // getpublicip answer moves benchmark's reply about the node itself too: the scope
 // becomes `benchmark`.
+// `scope: 'list'` moves only the list entry: the chain lists the node's collateral at
+// another address, as a second machine's confirmation there does, while the node,
+// its status and benchmark still say it is where it was.
 // Hide a node from its PEERS' view of the network, or put it back. The node keeps
 // seeing itself, which is what lets it still run the availability check that then
 // comes back "unreachable" - deterministically, because a peer answers from its
@@ -1383,8 +1386,8 @@ control.post('/node-address/:ip', (req, res) => {
     reportedAddresses.delete(key);
     return res.json({ node: key, reported: node.ip, scope: null });
   }
-  if (!['all', 'benchmark', 'publicip'].includes(scope)) {
-    return res.status(400).json({ error: `scope must be 'all', 'benchmark' or 'publicip', got '${scope}'` });
+  if (!['all', 'benchmark', 'publicip', 'list'].includes(scope)) {
+    return res.status(400).json({ error: `scope must be 'all', 'benchmark', 'publicip' or 'list', got '${scope}'` });
   }
 
   // A bare address keeps the node's own port. The api port is what its peers reach

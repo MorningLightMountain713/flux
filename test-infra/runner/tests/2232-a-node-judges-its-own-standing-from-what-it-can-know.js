@@ -7,7 +7,7 @@ import { createTestEnv, SYNCTHING_FAULT } from '../framework/test-env.js';
 import { bootAndPeer } from '../framework/reconciler-suite.js';
 import { execInContainer } from '../framework/container.js';
 import {
-  setBenchmarkUnresolved, getJournal, clearJournal, setNodeList, setNodeStatus, clearNodeStatus,
+  setBenchmarkUnresolved, getJournal, clearJournal, setNodeAddress, setNodeStatus, clearNodeStatus,
 } from '../framework/daemon-control.js';
 import { getSubnetConfig } from '../framework/subnet-config.js';
 import { waitFor } from '../framework/wait.js';
@@ -243,16 +243,16 @@ describe('a node judges its own standing from what it can know', function () {
       const own = list.find((entry) => String(entry.ip).split(':')[0] === ipOf(COLLIDES));
       const second = { ...own, ip: `${ipOf(STUB_PEER)}:16127` };
 
-      // A collateral is listed once: at the second address, in place of the node's own.
+      // The chain lists the node's collateral at the second address, in place of its own.
       const anchor = node.getLastEventId();
-      await setNodeList(list.map((entry) => (entry === own ? second : entry)));
+      await setNodeAddress(ipOf(COLLIDES), second.ip, { scope: 'list' });
       await node.waitForEvent('daemon:deltaApplied', (d) => d.updated >= 1, 120000, { afterId: anchor });
       const refreshedAt = Date.now();
       await waitFor(async () => (await dosOf(node)).dosState >= 100, {
         timeout: 90000, interval: 500, label: 'the node out of service for the collision',
       });
       const afterRefreshMs = Date.now() - refreshedAt;
-      await setNodeList(list);
+      await setNodeAddress(ipOf(COLLIDES));
 
       // the pass that refresh runs, which asks the second address whether it answers
       expect(afterRefreshMs, 'from the refresh to out of service').to.be.below(10000);
