@@ -1,0 +1,16 @@
+[
+  {
+    "name": "replacement-counts-the-app-twice",
+    "breaks": "a node judges whether it can hold an app's new specification without the app being replaced: counted beside its old specification, an app that fits alone is given up",
+    "edits": [
+      {
+        "file": "ZelBack/src/services/appRequirements/hwRequirements.js",
+        "from": "nodeCapacity({ ignoreReclaimable: true, excludeApp: appName })",
+        "to": "nodeCapacity({ ignoreReclaimable: true })"
+      }
+    ],
+    "red": [
+      "a redeploy keeps the app on a node with room for its new specification alone replaces the component at the new specification and keeps the app"
+    ]
+  }
+]

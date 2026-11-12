@@ -10,15 +10,16 @@
  * its old resources and its new ones. A node short of room for both refuses, and
  * the refusal removes the app from the node and tells the network.
  *
- * The node is sized so the difference decides it. A cumulus node's disk is
- * 240 GB, 228 usable; reserving 203 of that for the system leaves 25 for apps.
- * The app reserves 10 GB plus the 2 GB filesystem minimum, and its update asks
- * for 20: counted alone it fits (20 of 25), counted beside the old row it does
- * not (20 of 25 - 12). The hdd change also takes the HARD path, which is the path
- * that removes the volume and so the one where a refusal costs the most.
+ * The node is sized so the difference decides it. A component of an app
+ * registered before v9 takes its hdd plus the root filesystem flux-spec gives it
+ * on the host; the room the node leaves for apps is the new footprint plus half
+ * the old one, so the new specification fits alone and not beside the old. The
+ * hdd change also takes the HARD path, which is the path that removes the volume
+ * and so the one where a refusal costs the most.
  */
 import { describe, it, before, after } from 'mocha';
 import { expect } from 'chai';
+import { parseContainerData } from '@runonflux/flux-spec-backend';
 import { createTestEnv } from '../framework/test-env.js';
 import { pushImage } from '../framework/registry-helper.js';
 import { buildSeedableApp, buildSeedableUpdate } from '../framework/seed-helper.js';
@@ -29,8 +30,16 @@ import { waitFor, waitForComponentRedeployed } from '../framework/wait.js';
 import { driveUntil, stopTicker } from '../framework/daemon-control.js';
 import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 
-// Node 1 (client index 0): a cumulus node with 25 GB left for apps.
-const ROOM_FOR_ONE_COPY = { lockedSystemResources: { hdd: 0, extrahdd: 203 } };
+const CONTAINER_DATA = '/tmp';
+const HDD_BEFORE = 10;
+const HDD_AFTER = 20;
+// A cumulus node's disk, and the share of it hwRequirements.nodeCapacity counts.
+const CUMULUS_DISK_GB = 240;
+const USABLE_GB = CUMULUS_DISK_GB * 0.95;
+const footprintGb = (hdd) => hdd + parseContainerData(CONTAINER_DATA, hdd, ['c'], 0).persistentStorage.rootFsGb;
+const ROOM_FOR_APPS_GB = footprintGb(HDD_AFTER) + footprintGb(HDD_BEFORE) / 2;
+// Node 1 (client index 0): a cumulus node with room for the new specification alone.
+const ROOM_FOR_ONE_COPY = { lockedSystemResources: { hdd: 0, extrahdd: Math.round(USABLE_GB - ROOM_FOR_APPS_GB) } };
 
 describe('a redeploy keeps the app on a node with room for its new specification alone', function () {
   let env;
@@ -78,10 +87,10 @@ describe('a redeploy keeps the app on a node with room for its new specification
         environmentParameters: [],
         commands: [],
         containerPorts: [80],
-        containerData: '/tmp',
+        containerData: CONTAINER_DATA,
         cpu: 0.1,
         ram: 100,
-        hdd: 10,
+        hdd: HDD_BEFORE,
         repoauth: '',
       }],
     });
@@ -102,7 +111,7 @@ describe('a redeploy keeps the app on a node with room for its new specification
     this.timeout(1500000);
 
     const updated = await buildSeedableUpdate(app, (spec) => {
-      spec.compose[0].hdd = 20;
+      spec.compose[0].hdd = HDD_AFTER;
     });
     const beforeUpdate = holder.getLastEventId();
     await seedSpecUpdate(env, updated, [0]);
@@ -120,7 +129,7 @@ describe('a redeploy keeps the app on a node with room for its new specification
     const installed = await localSpec(holder);
     expect(installed, 'the node removed the app: it counted the old specification beside the new one').to.not.be.null;
     expect(installed.hash, 'the row is at the new specification').to.equal(updated.hash);
-    expect(installed.compose[0].hdd).to.equal(20);
+    expect(installed.compose[0].hdd).to.equal(HDD_AFTER);
 
     const containerAfter = await getAppContainerId(holder.container, appName, appName);
     expect(containerAfter, 'the app is running after the redeploy').to.be.a('string');
