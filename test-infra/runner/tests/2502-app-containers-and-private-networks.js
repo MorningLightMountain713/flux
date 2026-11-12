@@ -5,12 +5,15 @@
 // and gives no exception to a network FluxOS did not create - and the ordinary
 // traffic it must leave alone.
 //
-// The containers run on the node's own docker. Most sit on networks created as
-// FluxOS creates an app's (fluxDockerNetwork_<app>, a 172.23.x.0/24 bridge), from a
-// static busybox image so an app can make the connections under test; FluxOS is
-// restarted once they exist, so its boot applies the chain with their bridges. One
-// app is installed through FluxOS, so its network is created by FluxOS itself. The
-// node runs with its firewall on, as nodes do. The node also holds the owner's
+// The containers run on the node's own docker. Two apps are installed through FluxOS,
+// each with a container that only listens and one published on a port FluxOS opens;
+// FluxOS creates their networks. The probe that makes the connections under test is
+// a container the suite starts on the first app's network: it forges its source
+// address, which needs NET_ADMIN, and FluxOS gives no app that. The system network,
+// docker0 and the owner's networks hold containers the suite starts, named as no app
+// is. FluxOS is restarted once they exist, so its boot applies the chain with every
+// bridge. A third app is installed later, so its network is created while FluxOS
+// runs. The node runs with its firewall on, as nodes do. The node also holds the owner's
 // networks: a LAN behind a host bridge named like a docker one (br-e2elan, in
 // 172.23.200.0/24), and a LAN behind a plain interface (lan0: 172.23.201.0/24 and
 // 192.168.88.0/24), each with a host answering on it. A second node, without a
@@ -27,7 +30,7 @@ import { describe, it, before, after, beforeEach, afterEach } from 'mocha';
 import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
 import {
-  appContainerName, execInContainer, restartDockerd, restartFluxos,
+  execInContainer, fluxAppNetworkName, requireAppContainerName, restartDockerd, restartFluxos,
 } from '../framework/container.js';
 import { pushBusybox } from '../framework/registry-helper.js';
 import { buildSeedableApp } from '../framework/seed-helper.js';
@@ -42,8 +45,7 @@ const NODE = 0;
 const OUTSIDE = 1;
 const IMAGE_REPO = 'e2enettools';
 const APP_IMAGE_REPO = 'e2enetapp';
-const APP_NETWORK = { name: 'fluxDockerNetwork_e2eprobe', subnet: '172.23.250' };
-const OTHER_NETWORK = { name: 'fluxDockerNetwork_e2eother', subnet: '172.23.251' };
+const SERVE_IMAGE_REPO = 'e2enetserve';
 const SYSTEM_NETWORK = { name: 'fluxDockerNetwork', subnet: '172.23.0' };
 // Networks FluxOS does not create: one in private space, one in public space.
 const OWNER_NETWORK = { name: 'e2eownernet', subnet: '172.30.250' };
@@ -69,12 +71,9 @@ const BLOCKED_TARGETS = {
   '198.51.100.0/24': '198.51.100.1',
   '203.0.113.0/24': '203.0.113.1',
 };
-// Published ports, as FluxOS publishes an app's and opens it in ufw.
-const PUBLISHED_PORT = 31999;
-const OTHER_PUBLISHED_PORT = 31998;
-const OTHER_UDP_PUBLISHED_PORT = 31996;
-const DEFAULT_PUBLISHED_PORT = 31995;
-const OWNER_PUBLISHED_PORT = 31994;
+// Ports published by the suite's own containers, below the harness's allocation range.
+const DEFAULT_PUBLISHED_PORT = 31195;
+const OWNER_PUBLISHED_PORT = 31194;
 // The owner's port forward from the node to a LAN host.
 const OWNER_FORWARD_PORT = 2222;
 // Every app container listens on TCP 8080, 8100 and 53 and answers UDP on 9001.
@@ -88,6 +87,8 @@ const ROUTER_SOURCE = '192.168.77.2';
 const API_PORT = 16127;
 const RULES_TIMEOUT_MS = 180000;
 const BUSYBOX = '/usr/local/bin/busybox';
+// The suite's own containers.
+const PROBE = 'e2eprobe';
 
 const subnet = getSubnetConfig();
 
@@ -100,6 +101,17 @@ describe('2502 app containers are kept off private networks and off each other\'
   let image;
   let restartedAt;
   let dockerMajor;
+  // The two apps' networks ({ name, subnet: its first three octets }), their
+  // containers, and the ports FluxOS published for them.
+  let appNet;
+  let otherNet;
+  let PEER;
+  let PUBLISHED;
+  let OTHER;
+  let OTHERPUB;
+  let PUBLISHED_PORT;
+  let OTHER_PUBLISHED_PORT;
+  let OTHER_UDP_PUBLISHED_PORT;
   dumpLogsOnFailure(() => env);
 
   const inNode = async (command) => execInContainer(node.container, command);
@@ -225,24 +237,64 @@ describe('2502 app containers are kept off private networks and off each other\'
     await pushBusybox(IMAGE_REPO, 'v1');
     image = `${REGISTRY_REPO_HOST}/${IMAGE_REPO}:v1`;
 
+    // Every app container serves TCP 8080, 8100 and 53 and UDP 9001, and UDP on
+    // 8080 too, where FluxOS publishes a port for both protocols.
+    await pushBusybox(SERVE_IMAGE_REPO, 'v1', 'serve', {
+      entrypoint: ['/bin/busybox', 'sh', '-c',
+        `/bin/busybox nc -lk -p ${TCP_PORT} -e /bin/busybox echo ok & /bin/busybox nc -lk -p ${UNPUBLISHED_PORT} -e /bin/busybox echo ok & `
+        + `/bin/busybox nc -lk -p 53 -e /bin/busybox echo ok & ${udpResponder('/bin/busybox', UDP_PORT)} & ${udpResponder('/bin/busybox', TCP_PORT)} & `
+        + 'exec /bin/busybox sleep 2147483647'],
+    });
+    const servingComponent = (name) => ({
+      name,
+      description: 'serves the ports the suite connects to',
+      repotag: `${REGISTRY_REPO_HOST}/${SERVE_IMAGE_REPO}:v1`,
+      ports: [],
+      domains: [''],
+      environmentParameters: [],
+      commands: [],
+      containerPorts: [TCP_PORT],
+      containerData: '/tmp',
+      cpu: 0.1,
+      ram: 100,
+      hdd: 1,
+      repoauth: '',
+    });
+    const stamp = Date.now();
+    const installed = async (name, components) => {
+      const app = await buildSeedableApp({ name, pinnedTo: [NODE], compose: components.map(servingComponent) });
+      const mark = node.getLastEventId();
+      await seedSpawnerApp(env, app);
+      await waitForAppInstalled(node, name, 240000, { afterId: mark });
+      const network = await fluxAppNetworkName(node.container, name);
+      const { stdout } = await inNode(`docker network inspect -f '{{(index .IPAM.Config 0).Subnet}}' ${network}`);
+      return { app, net: { name: network, subnet: stdout.trim().split('.').slice(0, 3).join('.') } };
+    };
+    const peerApp = await installed(`e2enetpeer${stamp}`, ['peer', 'published']);
+    const otherApp = await installed(`e2enetother${stamp}`, ['other', 'otherpublished']);
+    appNet = peerApp.net;
+    otherNet = otherApp.net;
+    PEER = await requireAppContainerName(node.container, peerApp.app.spec.name, 'peer');
+    PUBLISHED = await requireAppContainerName(node.container, peerApp.app.spec.name, 'published');
+    OTHER = await requireAppContainerName(node.container, otherApp.app.spec.name, 'other');
+    OTHERPUB = await requireAppContainerName(node.container, otherApp.app.spec.name, 'otherpublished');
+    [, PUBLISHED_PORT] = peerApp.app.spec.compose.map((c) => c.ports[0]);
+    [, OTHER_PUBLISHED_PORT] = otherApp.app.spec.compose.map((c) => c.ports[0]);
+    OTHER_UDP_PUBLISHED_PORT = OTHER_PUBLISHED_PORT;
+
     const network = (n) => `docker network create --subnet ${n.subnet}.0/24 --gateway ${n.subnet}.1 ${n.name} >/dev/null`;
     const setup = await inNode([
       'set -e',
       `cid=$(docker create ${image}); docker cp "$cid:/bin/busybox" ${BUSYBOX}; docker rm "$cid" >/dev/null`,
-      ...[APP_NETWORK, OTHER_NETWORK, OWNER_NETWORK, OWNER_PUBLIC_NETWORK].map(network),
+      ...[OWNER_NETWORK, OWNER_PUBLIC_NETWORK].map(network),
       `docker network inspect ${SYSTEM_NETWORK.name} >/dev/null 2>&1 || ${network(SYSTEM_NETWORK)}`,
-      `docker run -d --name fluxe2eprobe --network ${APP_NETWORK.name} --cap-add NET_ADMIN ${image} >/dev/null`,
-      serving('fluxe2epeer', APP_NETWORK.name),
-      serving('fluxe2epublished', APP_NETWORK.name, `-p ${PUBLISHED_PORT}:${TCP_PORT}`),
-      serving('fluxe2eother', OTHER_NETWORK.name),
-      serving('fluxe2eotherpublished', OTHER_NETWORK.name, `-p ${OTHER_PUBLISHED_PORT}:${TCP_PORT} -p ${OTHER_UDP_PUBLISHED_PORT}:${UDP_PORT}/udp`),
-      serving('fluxe2esystem', SYSTEM_NETWORK.name),
-      `docker run -d --name fluxe2edefault --cap-add NET_ADMIN ${image} >/dev/null`,
-      serving('fluxe2edefaultpeer', 'bridge', `-p ${DEFAULT_PUBLISHED_PORT}:${TCP_PORT}`),
-      serving('fluxe2eowner', OWNER_NETWORK.name, `-p ${OWNER_PUBLISHED_PORT}:${TCP_PORT}`),
-      serving('fluxe2eownerpub', OWNER_PUBLIC_NETWORK.name),
-      ...[PUBLISHED_PORT, OTHER_PUBLISHED_PORT, DEFAULT_PUBLISHED_PORT, OWNER_PUBLISHED_PORT].map((port) => `ufw allow ${port}/tcp >/dev/null`),
-      `ufw allow ${OTHER_UDP_PUBLISHED_PORT}/udp >/dev/null`,
+      `docker run -d --name ${PROBE} --network ${appNet.name} --cap-add NET_ADMIN ${image} >/dev/null`,
+      serving('e2esystem', SYSTEM_NETWORK.name),
+      `docker run -d --name e2edefault --cap-add NET_ADMIN ${image} >/dev/null`,
+      serving('e2edefaultpeer', 'bridge', `-p ${DEFAULT_PUBLISHED_PORT}:${TCP_PORT}`),
+      serving('e2eowner', OWNER_NETWORK.name, `-p ${OWNER_PUBLISHED_PORT}:${TCP_PORT}`),
+      serving('e2eownerpub', OWNER_PUBLIC_NETWORK.name),
+      ...[DEFAULT_PUBLISHED_PORT, OWNER_PUBLISHED_PORT].map((port) => `ufw allow ${port}/tcp >/dev/null`),
       // The owner's LAN behind a host bridge named like a docker one.
       'ip netns add lanb',
       `ip link add ${HOST_BRIDGE} type bridge && ip addr add ${BRIDGE_LAN.gateway}/24 dev ${HOST_BRIDGE} && ip link set ${HOST_BRIDGE} up`,
@@ -287,7 +339,7 @@ describe('2502 app containers are kept off private networks and off each other\'
   describe('the listeners a blocked case aims at answer the node itself', () => {
     it('every app container and every LAN host answers', async () => {
       const targets = [
-        ...await Promise.all(['fluxe2epeer', 'fluxe2eother', 'fluxe2eotherpublished', 'fluxe2esystem', 'fluxe2edefaultpeer', 'fluxe2eowner', 'fluxe2eownerpub'].map(containerIp)),
+        ...await Promise.all([PEER, OTHER, OTHERPUB, 'e2esystem', 'e2edefaultpeer', 'e2eowner', 'e2eownerpub'].map(containerIp)),
         BRIDGE_LAN.host, UPLINK_LAN.host, UPLINK_LAN.privateHost,
       ];
       // eslint-disable-next-line no-restricted-syntax
@@ -296,7 +348,7 @@ describe('2502 app containers are kept off private networks and off each other\'
         const tcp = await inNode(`echo | ${BUSYBOX} nc -w 3 ${target} ${TCP_PORT}`);
         expect(tcp.stdout.trim(), `${target}:${TCP_PORT} from the node`).to.equal('ok');
       }
-      const udp = await inNode(`echo x | ${BUSYBOX} nc -u -w 2 ${await containerIp('fluxe2eother')} ${UDP_PORT}`);
+      const udp = await inNode(`echo x | ${BUSYBOX} nc -u -w 2 ${await containerIp(OTHER)} ${UDP_PORT}`);
       expect(udp.stdout.trim(), 'UDP from the node').to.equal('ok');
       const lanUdp = await inNode(`echo x | ${BUSYBOX} nc -u -w 2 ${BRIDGE_LAN.host} ${UDP_PORT}`);
       expect(lanUdp.stdout.trim(), 'UDP to the LAN from the node').to.equal('ok');
@@ -315,7 +367,7 @@ describe('2502 app containers are kept off private networks and off each other\'
 
     it('names docker0 and each FluxOS network\'s bridge, and drops into every docker network', async () => {
       const rules = (await chain()).split('\n');
-      const flux = await Promise.all([SYSTEM_NETWORK, APP_NETWORK, OTHER_NETWORK].map((n) => bridgeOf(n.name)));
+      const flux = await Promise.all([SYSTEM_NETWORK, appNet, otherNet].map((n) => bridgeOf(n.name)));
       const owner = await Promise.all([OWNER_NETWORK, OWNER_PUBLIC_NETWORK].map((n) => bridgeOf(n.name)));
       ['docker0', ...flux].forEach((bridge) => {
         expect(rules, `same-network exception for ${bridge}`).to.include(`-A DOCKER-USER -i ${bridge} -o ${bridge} -j RETURN`);
@@ -339,25 +391,25 @@ describe('2502 app containers are kept off private networks and off each other\'
 
   describe('traffic that must pass', () => {
     it('connects an app\'s own containers to each other, over TCP, UDP and ICMP', async () => {
-      const peer = await containerIp('fluxe2epeer');
-      expect(await tcpAnswer('fluxe2eprobe', peer, TCP_PORT)).to.equal('ok');
-      expect(await udpAnswer('fluxe2eprobe', peer, UDP_PORT)).to.equal('ok');
-      expect(await pings('fluxe2eprobe', peer)).to.equal(true);
+      const peer = await containerIp(PEER);
+      expect(await tcpAnswer(PROBE, peer, TCP_PORT)).to.equal('ok');
+      expect(await udpAnswer(PROBE, peer, UDP_PORT)).to.equal('ok');
+      expect(await pings(PROBE, peer)).to.equal(true);
     });
 
     it('connects two containers on docker0', async () => {
-      expect(await tcpAnswer('fluxe2edefault', await containerIp('fluxe2edefaultpeer'), TCP_PORT)).to.equal('ok');
+      expect(await tcpAnswer('e2edefault', await containerIp('e2edefaultpeer'), TCP_PORT)).to.equal('ok');
     });
 
     it('reaches the fleet over TCP, UDP and ICMP', async () => {
-      expect(await tcpConnects('fluxe2eprobe', subnet.registry, REGISTRY_PORT), 'TCP to the fleet registry').to.equal(true);
+      expect(await tcpConnects(PROBE, subnet.registry, REGISTRY_PORT), 'TCP to the fleet registry').to.equal(true);
 
       await inOutside(`rm -f /tmp/udp-in; nc -u -l ${FLEET_UDP_PORT} > /tmp/udp-in </dev/null 2>/dev/null & echo $! > /tmp/udp-pid`);
-      await inApp('fluxe2eprobe', `sh -c 'sleep 1; echo from-an-app | /bin/busybox nc -u -w 1 ${outside.ip} ${FLEET_UDP_PORT}'`);
+      await inApp(PROBE, `sh -c 'sleep 1; echo from-an-app | /bin/busybox nc -u -w 1 ${outside.ip} ${FLEET_UDP_PORT}'`);
       const { stdout: received } = await inOutside('sleep 1; cat /tmp/udp-in; kill "$(cat /tmp/udp-pid)" 2>/dev/null || true');
       expect(received, 'UDP to a fleet node').to.include('from-an-app');
 
-      const ping = await inApp('fluxe2eprobe', `ping -c 1 -W 3 ${outside.ip}`);
+      const ping = await inApp(PROBE, `ping -c 1 -W 3 ${outside.ip}`);
       expect(ping.exitCode, `ICMP to a fleet node: ${ping.stdout}`).to.equal(0);
     });
 
@@ -390,68 +442,68 @@ describe('2502 app containers are kept off private networks and off each other\'
     });
 
     it('reaches its own node\'s API and its own published port at the node\'s address', async () => {
-      expect(await tcpConnects('fluxe2eprobe', node.ip, API_PORT), 'the node\'s API').to.equal(true);
-      expect(await tcpAnswer('fluxe2eprobe', node.ip, PUBLISHED_PORT), 'its own published port').to.equal('ok');
+      expect(await tcpConnects(PROBE, node.ip, API_PORT), 'the node\'s API').to.equal(true);
+      expect(await tcpAnswer(PROBE, node.ip, PUBLISHED_PORT), 'its own published port').to.equal('ok');
     });
 
     it('reaches another app\'s published TCP port at the node\'s address and at either network\'s gateway', async () => {
-      expect(await tcpAnswer('fluxe2eprobe', node.ip, OTHER_PUBLISHED_PORT), 'at the node\'s address').to.equal('ok');
-      expect(await tcpAnswer('fluxe2eprobe', `${OTHER_NETWORK.subnet}.1`, OTHER_PUBLISHED_PORT), 'its network\'s gateway').to.equal('ok');
-      expect(await tcpAnswer('fluxe2eprobe', `${APP_NETWORK.subnet}.1`, OTHER_PUBLISHED_PORT), 'its own gateway').to.equal('ok');
+      expect(await tcpAnswer(PROBE, node.ip, OTHER_PUBLISHED_PORT), 'at the node\'s address').to.equal('ok');
+      expect(await tcpAnswer(PROBE, `${otherNet.subnet}.1`, OTHER_PUBLISHED_PORT), 'its network\'s gateway').to.equal('ok');
+      expect(await tcpAnswer(PROBE, `${appNet.subnet}.1`, OTHER_PUBLISHED_PORT), 'its own gateway').to.equal('ok');
     });
 
     // Before Docker 28, Docker does not return the reply to a UDP request one container
     // sends another's published port at the node's address, whatever DOCKER-USER holds;
     // there the request reaching the container is what the chain decides.
     it('reaches another app\'s published UDP port at the node\'s address', async () => {
-      const { result, packets } = await delivered(await containerIp('fluxe2eotherpublished'), UDP_PORT, 'udp', () => udpAnswer('fluxe2eprobe', node.ip, OTHER_UDP_PUBLISHED_PORT));
+      const { result, packets } = await delivered(await containerIp(OTHERPUB), UDP_PORT, 'udp', () => udpAnswer(PROBE, node.ip, OTHER_UDP_PUBLISHED_PORT));
       if (dockerMajor >= 28) expect(result).to.equal('ok');
       else expect(packets, 'the request reaching the container').to.be.above(0);
     });
 
     it('reaches docker0\'s published port from an app, and an app\'s from docker0', async () => {
-      expect(await tcpAnswer('fluxe2eprobe', node.ip, DEFAULT_PUBLISHED_PORT)).to.equal('ok');
-      expect(await tcpAnswer('fluxe2edefault', node.ip, OTHER_PUBLISHED_PORT)).to.equal('ok');
+      expect(await tcpAnswer(PROBE, node.ip, DEFAULT_PUBLISHED_PORT)).to.equal('ok');
+      expect(await tcpAnswer('e2edefault', node.ip, OTHER_PUBLISHED_PORT)).to.equal('ok');
     });
 
     it('lets an app\'s DNS reach a private address over UDP and TCP, a LAN resolver included', async () => {
       const udpBefore = await ruleHits('RETURN', 'br-+', 'udp dpt:53');
-      await inApp('fluxe2eprobe', `sh -c 'echo | /bin/busybox nc -u -w 1 ${PRIVATE_TARGET} 53'`);
+      await inApp(PROBE, `sh -c 'echo | /bin/busybox nc -u -w 1 ${PRIVATE_TARGET} 53'`);
       expect(await ruleHits('RETURN', 'br-+', 'udp dpt:53')).to.be.above(udpBefore);
-      expect(await udpAnswer('fluxe2eprobe', UPLINK_LAN.privateHost, 53), 'UDP to a LAN resolver').to.equal('ok');
-      expect(await tcpAnswer('fluxe2eprobe', UPLINK_LAN.privateHost, 53), 'TCP to a LAN resolver').to.equal('ok');
-      expect(await tcpAnswer('fluxe2eprobe', BRIDGE_LAN.host, 53), 'TCP to a resolver behind the host bridge').to.equal('ok');
+      expect(await udpAnswer(PROBE, UPLINK_LAN.privateHost, 53), 'UDP to a LAN resolver').to.equal('ok');
+      expect(await tcpAnswer(PROBE, UPLINK_LAN.privateHost, 53), 'TCP to a LAN resolver').to.equal('ok');
+      expect(await tcpAnswer(PROBE, BRIDGE_LAN.host, 53), 'TCP to a resolver behind the host bridge').to.equal('ok');
     });
 
     it('still lets an app reach fluxnode.service and the node\'s own addresses', async () => {
       const [host, port] = FLUX_NODE_SERVICE.split(':');
-      expect(await tcpConnects('fluxe2eprobe', host, port), 'fluxnode.service').to.equal(true);
-      expect(await tcpConnects('fluxe2eprobe', `${APP_NETWORK.subnet}.1`, API_PORT), 'the API at its gateway').to.equal(true);
-      expect(await tcpConnects('fluxe2eprobe', UPLINK_LAN.privateGateway, API_PORT), 'the API at the node\'s LAN address').to.equal(true);
+      expect(await tcpConnects(PROBE, host, port), 'fluxnode.service').to.equal(true);
+      expect(await tcpConnects(PROBE, `${appNet.subnet}.1`, API_PORT), 'the API at its gateway').to.equal(true);
+      expect(await tcpConnects(PROBE, UPLINK_LAN.privateGateway, API_PORT), 'the API at the node\'s LAN address').to.equal(true);
     });
   });
 
   describe('traffic that must not pass', () => {
     it('keeps an app off another app\'s container, on every port and protocol', async () => {
-      const other = await containerIp('fluxe2eotherpublished');
-      await expectTcpBlocked('fluxe2eprobe', other, TCP_PORT);
-      await expectTcpBlocked('fluxe2eprobe', other, UNPUBLISHED_PORT);
-      await expectTcpBlocked('fluxe2eprobe', other, 53);
-      await expectUdpBlocked('fluxe2eprobe', other, UDP_PORT);
-      await expectPingBlocked('fluxe2eprobe', other);
+      const other = await containerIp(OTHERPUB);
+      await expectTcpBlocked(PROBE, other, TCP_PORT);
+      await expectTcpBlocked(PROBE, other, UNPUBLISHED_PORT);
+      await expectTcpBlocked(PROBE, other, 53);
+      await expectUdpBlocked(PROBE, other, UDP_PORT);
+      await expectPingBlocked(PROBE, other);
     });
 
     it('keeps an app off the FluxOS system network\'s containers and docker0\'s', async () => {
-      await expectTcpBlocked('fluxe2eprobe', await containerIp('fluxe2esystem'), TCP_PORT);
-      await expectTcpBlocked('fluxe2eprobe', await containerIp('fluxe2edefaultpeer'), TCP_PORT);
-      await expectTcpBlocked('fluxe2edefault', await containerIp('fluxe2epeer'), TCP_PORT);
+      await expectTcpBlocked(PROBE, await containerIp('e2esystem'), TCP_PORT);
+      await expectTcpBlocked(PROBE, await containerIp('e2edefaultpeer'), TCP_PORT);
+      await expectTcpBlocked('e2edefault', await containerIp(PEER), TCP_PORT);
     });
 
     it('keeps an app off networks FluxOS did not create, private or public, and them off it', async () => {
-      await expectTcpBlocked('fluxe2eprobe', await containerIp('fluxe2eowner'), TCP_PORT);
-      await expectTcpBlocked('fluxe2eprobe', await containerIp('fluxe2eownerpub'), TCP_PORT);
-      await expectTcpBlocked('fluxe2eowner', await containerIp('fluxe2epeer'), TCP_PORT);
-      await expectTcpBlocked('fluxe2eowner', UPLINK_LAN.privateHost, TCP_PORT);
+      await expectTcpBlocked(PROBE, await containerIp('e2eowner'), TCP_PORT);
+      await expectTcpBlocked(PROBE, await containerIp('e2eownerpub'), TCP_PORT);
+      await expectTcpBlocked('e2eowner', await containerIp(PEER), TCP_PORT);
+      await expectTcpBlocked('e2eowner', UPLINK_LAN.privateHost, TCP_PORT);
     });
 
     it('drops a connection from outside into a network FluxOS did not create, its published port included', async () => {
@@ -464,42 +516,42 @@ describe('2502 app containers are kept off private networks and off each other\'
 
     it('keeps an app off the owner\'s LAN behind a host bridge named like a docker one: 172.23 over TCP, UDP and ICMP', async () => {
       const before = await ruleHits('DROP', 'br-+', '172.16.0.0/12');
-      await expectTcpBlocked('fluxe2eprobe', BRIDGE_LAN.host, TCP_PORT);
-      await expectUdpBlocked('fluxe2eprobe', BRIDGE_LAN.host, UDP_PORT);
-      await expectPingBlocked('fluxe2eprobe', BRIDGE_LAN.host);
+      await expectTcpBlocked(PROBE, BRIDGE_LAN.host, TCP_PORT);
+      await expectUdpBlocked(PROBE, BRIDGE_LAN.host, UDP_PORT);
+      await expectPingBlocked(PROBE, BRIDGE_LAN.host);
       expect(await ruleHits('DROP', 'br-+', '172.16.0.0/12')).to.be.above(before);
     });
 
     it('keeps an app off the owner\'s LAN behind a plain interface: 172.23 and 192.168', async () => {
-      await expectTcpBlocked('fluxe2eprobe', UPLINK_LAN.host, TCP_PORT);
-      await expectUdpBlocked('fluxe2eprobe', UPLINK_LAN.host, UDP_PORT);
-      await expectTcpBlocked('fluxe2eprobe', UPLINK_LAN.privateHost, TCP_PORT);
-      await expectUdpBlocked('fluxe2eprobe', UPLINK_LAN.privateHost, UDP_PORT);
-      await expectPingBlocked('fluxe2eprobe', UPLINK_LAN.privateHost);
+      await expectTcpBlocked(PROBE, UPLINK_LAN.host, TCP_PORT);
+      await expectUdpBlocked(PROBE, UPLINK_LAN.host, UDP_PORT);
+      await expectTcpBlocked(PROBE, UPLINK_LAN.privateHost, TCP_PORT);
+      await expectUdpBlocked(PROBE, UPLINK_LAN.privateHost, UDP_PORT);
+      await expectPingBlocked(PROBE, UPLINK_LAN.privateHost);
     });
 
     it('keeps an app off a LAN host the owner forwards a node port to', async () => {
-      await expectTcpBlocked('fluxe2eprobe', node.ip, OWNER_FORWARD_PORT, { to: UPLINK_LAN.privateHost, toPort: TCP_PORT });
+      await expectTcpBlocked(PROBE, node.ip, OWNER_FORWARD_PORT, { to: UPLINK_LAN.privateHost, toPort: TCP_PORT });
     });
 
     Object.entries(BLOCKED_TARGETS).forEach(([range, target]) => {
       it(`drops an app's connection into ${range}`, async () => {
         const before = await ruleHits('DROP', 'br-+', range);
-        expect(await tcpConnects('fluxe2eprobe', target, 80)).to.equal(false);
+        expect(await tcpConnects(PROBE, target, 80)).to.equal(false);
         expect(await ruleHits('DROP', 'br-+', range)).to.be.above(before);
       });
     });
 
     it('drops a private destination on a resolver\'s other ports', async () => {
       const before = await ruleHits('DROP', 'br-+', '10.0.0.0/8');
-      expect(await tcpConnects('fluxe2eprobe', PRIVATE_TARGET, 853)).to.equal(false);
+      expect(await tcpConnects(PROBE, PRIVATE_TARGET, 853)).to.equal(false);
       expect(await ruleHits('DROP', 'br-+', '10.0.0.0/8')).to.be.above(before);
     });
 
     it('drops a container on docker\'s default bridge the same way, and lets it reach the fleet', async () => {
-      expect(await tcpConnects('fluxe2edefault', subnet.registry, REGISTRY_PORT)).to.equal(true);
+      expect(await tcpConnects('e2edefault', subnet.registry, REGISTRY_PORT)).to.equal(true);
       const before = await ruleHits('DROP', 'docker0', '10.0.0.0/8');
-      expect(await tcpConnects('fluxe2edefault', PRIVATE_TARGET, 80)).to.equal(false);
+      expect(await tcpConnects('e2edefault', PRIVATE_TARGET, 80)).to.equal(false);
       expect(await ruleHits('DROP', 'docker0', '10.0.0.0/8')).to.be.above(before);
     });
 
@@ -516,16 +568,16 @@ describe('2502 app containers are kept off private networks and off each other\'
       };
 
       it('cannot reach the LAN with a public source', async () => {
-        expect(await forged('fluxe2eprobe', `${subnet.base}.250`, UPLINK_LAN.privateHost, TCP_PORT)).to.equal(0);
-        expect(await forged('fluxe2edefault', `${subnet.base}.251`, UPLINK_LAN.privateHost, TCP_PORT)).to.equal(0);
+        expect(await forged(PROBE, `${subnet.base}.250`, UPLINK_LAN.privateHost, TCP_PORT)).to.equal(0);
+        expect(await forged('e2edefault', `${subnet.base}.251`, UPLINK_LAN.privateHost, TCP_PORT)).to.equal(0);
       });
 
       it('cannot reach a 172.23 LAN host with another app network\'s source', async () => {
-        expect(await forged('fluxe2eprobe', `${OTHER_NETWORK.subnet}.250`, UPLINK_LAN.host, TCP_PORT)).to.equal(0);
+        expect(await forged(PROBE, `${otherNet.subnet}.250`, UPLINK_LAN.host, TCP_PORT)).to.equal(0);
       });
 
       it('cannot reach another app\'s container with that app network\'s source', async () => {
-        expect(await forged('fluxe2eprobe', `${OTHER_NETWORK.subnet}.251`, await containerIp('fluxe2eother'), TCP_PORT)).to.equal(0);
+        expect(await forged(PROBE, `${otherNet.subnet}.251`, await containerIp(OTHER), TCP_PORT)).to.equal(0);
       });
     });
   });
@@ -534,7 +586,7 @@ describe('2502 app containers are kept off private networks and off each other\'
     let appName;
     let appPorts;
     let appBridge;
-    const container = (component) => appContainerName(node.container, appName, component);
+    const container = (component) => requireAppContainerName(node.container, appName, component);
 
     before(async function install() {
       this.timeout(300000);
@@ -565,7 +617,7 @@ describe('2502 app containers are kept off private networks and off each other\'
       // The node's own spawner installs it, as apps land in production: pinned to this node, it is the only one that can select it.
       await seedSpawnerApp(env, app);
       await waitForAppInstalled(node, appName, 240000, { afterId: mark });
-      appBridge = await bridgeOf(`fluxDockerNetwork_${appName}`);
+      appBridge = await bridgeOf(await fluxAppNetworkName(node.container, appName));
     });
 
     it('applies the chain with its network\'s bridge as FluxOS creates the network', async () => {
@@ -582,10 +634,10 @@ describe('2502 app containers are kept off private networks and off each other\'
     });
 
     it('answers another app on its published ports, and not on its containers', async () => {
-      expect(await tcpAnswer('fluxe2eprobe', node.ip, appPorts[0])).to.equal('ok');
+      expect(await tcpAnswer(PROBE, node.ip, appPorts[0])).to.equal('ok');
       const front = await container('front');
-      await expectTcpBlocked('fluxe2eprobe', await containerIp(front), TCP_PORT);
-      await expectTcpBlocked(front, await containerIp('fluxe2epeer'), TCP_PORT);
+      await expectTcpBlocked(PROBE, await containerIp(front), TCP_PORT);
+      await expectTcpBlocked(front, await containerIp(PEER), TCP_PORT);
     });
 
     it('keeps its containers off the owner\'s LANs', async () => {
@@ -624,7 +676,7 @@ describe('2502 app containers are kept off private networks and off each other\'
       await waitForBootSettled(node, RULES_TIMEOUT_MS, { afterId });
       expect(await chain()).to.equal(rules);
       expect((await inNode('iptables -C FORWARD -j DOCKER-USER')).exitCode, 'the FORWARD jump').to.equal(0);
-      await expectTcpBlocked('fluxe2eprobe', BRIDGE_LAN.host, TCP_PORT);
+      await expectTcpBlocked(PROBE, BRIDGE_LAN.host, TCP_PORT);
     });
 
     it('survives a ufw reload', async () => {
@@ -639,13 +691,13 @@ describe('2502 app containers are kept off private networks and off each other\'
       await restartDockerd(node.container);
       expect(await chain()).to.equal(rules);
       expect((await inNode('iptables -C FORWARD -j DOCKER-USER')).exitCode, 'the FORWARD jump').to.equal(0);
-      const started = await inNode('docker start fluxe2eprobe fluxe2epeer fluxe2eotherpublished >/dev/null');
+      const started = await inNode(`docker start ${PROBE} ${PEER} ${OTHERPUB} >/dev/null`);
       expect(started.exitCode, started.stderr).to.equal(0);
-      await expectTcpBlocked('fluxe2eprobe', BRIDGE_LAN.host, TCP_PORT);
-      await expectTcpBlocked('fluxe2eprobe', await containerIp('fluxe2eotherpublished'), TCP_PORT);
-      expect(await tcpAnswer('fluxe2eprobe', node.ip, OTHER_PUBLISHED_PORT)).to.equal('ok');
-      expect(await tcpAnswer('fluxe2eprobe', await containerIp('fluxe2epeer'), TCP_PORT)).to.equal('ok');
-      expect(await tcpConnects('fluxe2eprobe', subnet.registry, REGISTRY_PORT)).to.equal(true);
+      await expectTcpBlocked(PROBE, BRIDGE_LAN.host, TCP_PORT);
+      await expectTcpBlocked(PROBE, await containerIp(OTHERPUB), TCP_PORT);
+      expect(await tcpAnswer(PROBE, node.ip, OTHER_PUBLISHED_PORT)).to.equal('ok');
+      expect(await tcpAnswer(PROBE, await containerIp(PEER), TCP_PORT)).to.equal('ok');
+      expect(await tcpConnects(PROBE, subnet.registry, REGISTRY_PORT)).to.equal(true);
     });
   });
 
@@ -654,7 +706,7 @@ describe('2502 app containers are kept off private networks and off each other\'
   // the FORWARD policy is ACCEPT: the chain is the only filter left.
   describe('with Docker\'s own isolation rules removed', () => {
     before(async () => {
-      const { stdout } = await inNode('docker start fluxe2eother fluxe2esystem fluxe2edefault fluxe2edefaultpeer fluxe2eowner fluxe2eownerpub >/dev/null; '
+      const { stdout } = await inNode(`docker start ${OTHER} e2esystem e2edefault e2edefaultpeer e2eowner e2eownerpub >/dev/null; `
         + 'iptables -P FORWARD ACCEPT && iptables -F FORWARD && '
         + 'for c in $(iptables -S | awk \'/^-N DOCKER/{print $2}\'); do [ "$c" = DOCKER-USER ] || iptables -F "$c"; done && '
         + 'iptables -I FORWARD -j DOCKER-USER && iptables -t raw -F PREROUTING && iptables -S FORWARD');
@@ -662,13 +714,13 @@ describe('2502 app containers are kept off private networks and off each other\'
     });
 
     it('drops an app\'s traffic into another app\'s container itself, on every port and protocol', async () => {
-      const other = await containerIp('fluxe2eotherpublished');
-      const otherBridge = await bridgeOf(OTHER_NETWORK.name);
+      const other = await containerIp(OTHERPUB);
+      const otherBridge = await bridgeOf(otherNet.name);
       const before = await outHits('DROP', otherBridge);
-      await expectTcpBlocked('fluxe2eprobe', other, TCP_PORT);
-      await expectTcpBlocked('fluxe2eprobe', other, 53);
-      await expectUdpBlocked('fluxe2eprobe', other, UDP_PORT);
-      await expectPingBlocked('fluxe2eprobe', other);
+      await expectTcpBlocked(PROBE, other, TCP_PORT);
+      await expectTcpBlocked(PROBE, other, 53);
+      await expectUdpBlocked(PROBE, other, UDP_PORT);
+      await expectPingBlocked(PROBE, other);
       expect(await outHits('DROP', otherBridge)).to.be.above(before);
     });
 
@@ -677,45 +729,45 @@ describe('2502 app containers are kept off private networks and off each other\'
     // docker-proxy on the node and never crosses this chain; elsewhere it is rewritten to
     // the container and passes by the DNAT exception.
     it('still passes another app\'s published port at the node\'s address', async () => {
-      const appBridge = await bridgeOf(APP_NETWORK.name);
+      const appBridge = await bridgeOf(appNet.name);
       const { stdout: nat } = await inNode('iptables -t nat -S DOCKER');
       const proxied = nat.split('\n').includes(`-A DOCKER -i ${appBridge} -j RETURN`);
-      const before = await outHits('RETURN', await bridgeOf(OTHER_NETWORK.name), { dnat: true });
-      expect(await tcpAnswer('fluxe2eprobe', node.ip, OTHER_PUBLISHED_PORT)).to.equal('ok');
-      if (!proxied) expect(await outHits('RETURN', await bridgeOf(OTHER_NETWORK.name), { dnat: true }), 'passed by the DNAT exception').to.be.above(before);
+      const before = await outHits('RETURN', await bridgeOf(otherNet.name), { dnat: true });
+      expect(await tcpAnswer(PROBE, node.ip, OTHER_PUBLISHED_PORT)).to.equal('ok');
+      if (!proxied) expect(await outHits('RETURN', await bridgeOf(otherNet.name), { dnat: true }), 'passed by the DNAT exception').to.be.above(before);
     });
 
     it('drops traffic into networks FluxOS did not create, the public one included', async () => {
       const ownerPub = await bridgeOf(OWNER_PUBLIC_NETWORK.name);
       const before = await outHits('DROP', ownerPub);
-      await expectTcpBlocked('fluxe2eprobe', await containerIp('fluxe2eownerpub'), TCP_PORT);
+      await expectTcpBlocked(PROBE, await containerIp('e2eownerpub'), TCP_PORT);
       expect(await outHits('DROP', ownerPub)).to.be.above(before);
-      await expectTcpBlocked('fluxe2eprobe', await containerIp('fluxe2eowner'), TCP_PORT);
-      await expectTcpBlocked('fluxe2eowner', await containerIp('fluxe2epeer'), TCP_PORT);
+      await expectTcpBlocked(PROBE, await containerIp('e2eowner'), TCP_PORT);
+      await expectTcpBlocked('e2eowner', await containerIp(PEER), TCP_PORT);
     });
 
     it('drops docker0 and the system network from apps and apps from them', async () => {
-      await expectTcpBlocked('fluxe2eprobe', await containerIp('fluxe2esystem'), TCP_PORT);
-      await expectTcpBlocked('fluxe2eprobe', await containerIp('fluxe2edefaultpeer'), TCP_PORT);
-      await expectTcpBlocked('fluxe2edefault', await containerIp('fluxe2epeer'), TCP_PORT);
+      await expectTcpBlocked(PROBE, await containerIp('e2esystem'), TCP_PORT);
+      await expectTcpBlocked(PROBE, await containerIp('e2edefaultpeer'), TCP_PORT);
+      await expectTcpBlocked('e2edefault', await containerIp(PEER), TCP_PORT);
     });
 
     it('drops a forged source to another app\'s container', async () => {
-      await inApp('fluxe2eprobe', `ip addr add ${OTHER_NETWORK.subnet}.252/32 dev eth0`);
+      await inApp(PROBE, `ip addr add ${otherNet.subnet}.252/32 dev eth0`);
       try {
-        const target = await containerIp('fluxe2eother');
-        const { packets } = await delivered(target, TCP_PORT, 'tcp', () => inApp('fluxe2eprobe', `sh -c 'echo | /bin/busybox nc -s ${OTHER_NETWORK.subnet}.252 -w 2 ${target} ${TCP_PORT}'`));
+        const target = await containerIp(OTHER);
+        const { packets } = await delivered(target, TCP_PORT, 'tcp', () => inApp(PROBE, `sh -c 'echo | /bin/busybox nc -s ${otherNet.subnet}.252 -w 2 ${target} ${TCP_PORT}'`));
         expect(packets).to.equal(0);
       } finally {
-        await inApp('fluxe2eprobe', `ip addr del ${OTHER_NETWORK.subnet}.252/32 dev eth0`);
+        await inApp(PROBE, `ip addr del ${otherNet.subnet}.252/32 dev eth0`);
       }
     });
 
     it('still keeps apps off the owner\'s LANs, and lets the same network and the fleet through', async () => {
-      await expectTcpBlocked('fluxe2eprobe', BRIDGE_LAN.host, TCP_PORT);
-      await expectTcpBlocked('fluxe2eprobe', UPLINK_LAN.host, TCP_PORT);
-      expect(await tcpAnswer('fluxe2eprobe', await containerIp('fluxe2epeer'), TCP_PORT)).to.equal('ok');
-      expect(await tcpConnects('fluxe2eprobe', subnet.registry, REGISTRY_PORT)).to.equal(true);
+      await expectTcpBlocked(PROBE, BRIDGE_LAN.host, TCP_PORT);
+      await expectTcpBlocked(PROBE, UPLINK_LAN.host, TCP_PORT);
+      expect(await tcpAnswer(PROBE, await containerIp(PEER), TCP_PORT)).to.equal('ok');
+      expect(await tcpConnects(PROBE, subnet.registry, REGISTRY_PORT)).to.equal(true);
     });
   });
 });
