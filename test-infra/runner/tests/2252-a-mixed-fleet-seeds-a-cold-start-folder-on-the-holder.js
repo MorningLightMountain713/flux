@@ -26,7 +26,7 @@ import { resetSyncState, pinColdStart, pinHolding } from '../framework/syncthing
 import { resetFdm } from '../framework/fdm-control.js';
 import { getSubnetConfig } from '../framework/subnet-config.js';
 import { waitFor } from '../framework/wait.js';
-import { bootAndPeer, installOnNodes } from '../framework/reconciler-suite.js';
+import { bootAndPeer, placeInOrder } from '../framework/reconciler-suite.js';
 import { syncthingSeedIndex } from '../framework/g-app-placement.js';
 import { buildSeedableSyncthingApp } from '../framework/seed-helper.js';
 import { pushImage } from '../framework/registry-helper.js';
@@ -82,7 +82,7 @@ describe('a mixed fleet seeds a cold-start folder on the holder', function () {
     await resetSyncState();
 
     await pushImage(appName, 'v1');
-    const spec = await buildSeedableSyncthingApp({ name: appName, syncMode: 'syncFirst', pinnedTo: HOLDERS });
+    const spec = await buildSeedableSyncthingApp({ name: appName, syncMode: 'syncFirst', instances: HOLDERS.length });
     await pinColdStart(HOLDERS, folder);
     await pinHolding(DATA_HOLDER, folder, HOLDER_BYTES);
 
@@ -91,7 +91,7 @@ describe('a mixed fleet seeds a cold-start folder on the holder', function () {
     const from = env.clients[UNMEASURED].getLastEventId();
     try {
       step('installing on all three holders, the third held before it measures the folder');
-      await installOnNodes(env, spec, HOLDERS);
+      await placeInOrder(env, spec, HOLDERS);
       parked = Boolean(await env.clients[UNMEASURED].waitForEvent(
         'checkpoint:held', (d) => d.name === BEFORE_HOLDINGS && d.key === folder, 120000, { afterId: from },
       ).catch(() => null));

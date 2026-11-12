@@ -5,7 +5,7 @@ import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
 import { pushTestApp } from '../framework/registry-helper.js';
 import { buildSeedableApp } from '../framework/seed-helper.js';
-import { bootAndPeer, installOnNodes } from '../framework/reconciler-suite.js';
+import { bootAndPeer, placeInOrder } from '../framework/reconciler-suite.js';
 import { waitFor, waitHolding } from '../framework/wait.js';
 import { isDaemonUp, isFolderSynced, getFolderConfig } from '../framework/syncthing-real.js';
 import { gComponent, watchGComponents } from '../framework/g-components.js';
@@ -69,16 +69,18 @@ describe('a rolling upgrade, standby first, brings up every g: component', funct
 
     await pushTestApp(appName, 'v1', 'roll', { user: APP_UID });
     const app = await buildSeedableApp({
-      pinnedTo: [PRIMARY, STANDBY],
       name: appName,
       instances: HOLDERS.length,
       compose: COMPONENTS.map((name) => gComponent(appName, name)),
     });
-    await installOnNodes(env, app, [PRIMARY]);
-    await waitHolding(async () => (await oneHolderAtMost())[PRIMARY].includes('db'), {
-      timeout: 300000, interval: 3000, label: 'the primary runs db',
+    await placeInOrder(env, app, [PRIMARY, STANDBY], {
+      afterEach: async (i) => {
+        if (i !== PRIMARY) return;
+        await waitHolding(async () => (await oneHolderAtMost())[PRIMARY].includes('db'), {
+          timeout: 300000, interval: 3000, label: 'the primary runs db',
+        });
+      },
     });
-    await installOnNodes(env, app, [STANDBY]);
     await waitFor(() => isFolderSynced(client(STANDBY), folderOf('db')), {
       timeout: 300000, interval: 3000, label: 'the standby has the primary\'s db data',
     });

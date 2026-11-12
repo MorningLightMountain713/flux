@@ -33,6 +33,7 @@ import {
   folderIdOf,
 } from './container.js';
 import { bootstrapPricing } from './price-helper.js';
+import { partition, healPartition } from './partition.js';
 
 // A folder the suite pins "synced" (setSynced reports a non-zero global index)
 // must also HOLD data on disk, like any really-synced folder. Seeded apps write
@@ -158,6 +159,60 @@ export async function releaseSpawnerHolds(env, appName, indices = spawnerNodes(e
 // that release's rules.
 function spawnerNodes(env) {
   return env.clients.map((client, i) => (client && env.nodeImageTag(i) === IMAGE_TAG ? i : -1)).filter((i) => i >= 0);
+}
+
+/**
+ * Places an app on the nodes in `order`, one after another, whatever build each
+ * runs: each installs it only once every node before it has. The app's message is
+ * handed to the nodes on this tree's build; a node on another build (a release a
+ * suite upgrades from) learns it from its peers. A node on this build waits its
+ * turn at its spawner checkpoint; one on another build has none, and waits its
+ * turn cut off from every other node (its chain feed left on), so it has not
+ * heard of the app until its turn. The app is unpinned: a release refuses a new
+ * pin from an owner outside the enterprise owners.
+ * @param {object} env
+ * @param {object} app A built, unpinned app whose instances are `order.length`.
+ * @param {number[]} order Node indices, in the order they install the app.
+ * @param {object} [options]
+ * @param {number} [options.timeout] Each node's install budget.
+ * @param {function(number): Promise<void>} [options.afterEach] Awaited once each
+ *   node has installed the app, before the next one's turn.
+ * @returns {Promise<void>}
+ */
+export async function placeInOrder(env, app, order, { timeout = 300000, afterEach = async () => {} } = {}) {
+  if (app.spec.pinTargets?.length) {
+    throw new Error(`placeInOrder needs an unpinned app: ${app.spec.name} is pinned`);
+  }
+  const name = app.spec.name;
+  const current = spawnerNodes(env);
+  const onThisBuild = new Set(current);
+  const elsewhere = order.filter((i) => !onThisBuild.has(i));
+  await holdSpawnerExcept(env, name, []);
+  // One pocket each: a release node waiting its turn reaches no other node,
+  // another waiting release node included.
+  for (const i of elsewhere) {
+    // eslint-disable-next-line no-await-in-loop
+    await partition(env, [i], { cutChain: false });
+  }
+  try {
+    await Promise.all(current.map((i) => waitForHashSyncComplete(env.clients[i])));
+    await seedGlobalSpec(env, app, current);
+    for (const i of order) {
+      const client = env.clients[i];
+      const mark = client.getLastEventId();
+      // eslint-disable-next-line no-await-in-loop
+      if (onThisBuild.has(i)) await releaseSpawnerHolds(env, name, [i]);
+      // eslint-disable-next-line no-await-in-loop
+      else await healPartition(env, [i]);
+      // eslint-disable-next-line no-await-in-loop
+      await waitForAppInstalled(client, name, timeout, { afterId: mark });
+      // eslint-disable-next-line no-await-in-loop
+      await afterEach(i);
+    }
+  } finally {
+    await healPartition(env, elsewhere);
+    await releaseSpawnerHolds(env, name);
+  }
 }
 
 /**
