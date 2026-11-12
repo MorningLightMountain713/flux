@@ -7,6 +7,7 @@ const sinon = require('sinon');
 const activeStandbyElection = require('../../ZelBack/src/services/appLifecycle/activeStandbyElection');
 const appOperations = require('../../ZelBack/src/services/appLifecycle/appOperations');
 const primaryRole = require('../../ZelBack/src/services/appLifecycle/primaryRole');
+const primaryWaits = require('../../ZelBack/src/services/appLifecycle/primaryWaits');
 const appGiveUp = require('../../ZelBack/src/services/appLifecycle/appGiveUp');
 const peerComponent = require('../../ZelBack/src/services/appMonitoring/peerComponent');
 const peerFolderLiveness = require('../../ZelBack/src/services/appMonitoring/peerFolderLiveness');
@@ -688,6 +689,35 @@ describe('activeStandbyElection', () => {
         await applyMove('192.168.1.200:16127', '192.168.1.201:16127');
 
         sinon.assert.notCalled(registryManager.appLocation);
+      });
+
+      describe('waiting to take it over', () => {
+        const waitingFor = async (deployment) => primaryWaits.waitingIdentifiers()
+          .includes(deployment.getComponent('valheim').identifier);
+
+        it('says it waits while the primary it remembers cannot be ruled out', async () => {
+          const deployment = await FIXTURES['registered on v9']();
+          await rememberPrimary(deployment);
+
+          await passAfterMove(deployment, '192.168.1.91:16127');
+
+          expect(await waitingFor(deployment)).to.equal(true);
+          expect(taken()).to.deep.equal([]);
+        });
+
+        it('waits no longer once the primary it remembers runs nothing', async () => {
+          const deployment = await FIXTURES['registered on v9']();
+          await rememberPrimary(deployment);
+          registryManager.appLocation.resolves(seniorAt(OLD));
+
+          await passAfterMove(deployment, '192.168.1.91:16127');
+          peerComponent.peerComponentState.callsFake(async () => peerComponent.PeerComponent.NOT_RUNNING);
+          fluxNetworkHelper.getLocalSocketAddress.restore();
+          appReconciler.hasControllerOpinion.restore();
+          await pass(deployment, { names: 'none', running: false });
+
+          expect(await waitingFor(deployment)).to.equal(false);
+        });
       });
 
       describe('followed by its collateral', () => {

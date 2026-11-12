@@ -30,6 +30,7 @@ const { listedOutpointAt, listedAddressOf } = require('../utils/nodeListLookup')
 const mastershipGrantGate = require('./mastershipGrantGate');
 const primaryRole = require('./primaryRole');
 const primaryRoleChanges = require('./primaryRoleChanges');
+const primaryWaits = require('./primaryWaits');
 const appGiveUp = require('./appGiveUp');
 
 // The activeStandby election: which holder of an app runs its activeStandby
@@ -51,9 +52,7 @@ const primaryByIdentifier = new Map();
 const primaryCollateralByIdentifier = new Map();
 const appNameByIdentifier = new Map();
 const electionCheckedAt = new Map();
-// How long an election record is worth reading: ten election cycles, so one missed
-// pass does not turn every verdict into "cannot say".
-const PRIMARY_ELECTION_STALE_MS = config.get('fluxapps.masterSlaveIntervalMs') * 10;
+const PRIMARY_ELECTION_STALE_MS = primaryWaits.ELECTION_RECORD_STALE_MS;
 // When a staggered standby is booked to start.
 const scheduledStart = new Map();
 // Reporting latches: each exclusion is stated once on entry.
@@ -129,6 +128,7 @@ async function followPrimaryCollateral(identifier, folderIds, appName) {
   if (delisted) {
     primaryByIdentifier.delete(identifier);
     primaryCollateralByIdentifier.delete(identifier);
+    primaryWaits.clear(identifier);
     log.info(`activeStandby: previous primary of ${identifier} left the node list - no primary is remembered`);
   }
   return true;
@@ -529,7 +529,10 @@ async function decideUnnamed({
   };
   const start = () => startMembers(members, runningIdentifiers);
   const peerWords = (state) => (state === PeerComponent.RUNNING ? 'is already running it' : 'could not be ruled out');
-  if (primaryByIdentifier.has(identifier) && !await followPrimaryCollateral(identifier, probeCtx.folderIds, appName)) return;
+  if (primaryByIdentifier.has(identifier) && !await followPrimaryCollateral(identifier, probeCtx.folderIds, appName)) {
+    primaryWaits.wait(identifier);
+    return;
+  }
 
   if (resumingMembers.some((member) => member.stop.asPrimary)) {
     // Its operator started an app this node was the primary of when it was
@@ -565,11 +568,17 @@ async function decideUnnamed({
     const previousState = await peerComponent.peerComponentState(`${extractIp(askedAt)}:${extractPort(askedAt)}`, { ...probeCtx, label: 'previous primary' });
     if (previousState !== PeerComponent.NOT_RUNNING) {
       if (previousState === PeerComponent.RUNNING) {
+        primaryWaits.clear(identifier);
         withdrawSeedMarks(members, 'the previous primary runs it');
         if (resuming) await settleOperatorStarts(members, 'the previous primary runs it');
+      } else {
+        // Waiting, and saying so to every holder that asks: one placed after this
+        // node does not take a turn this node is only waiting out.
+        primaryWaits.wait(identifier);
       }
       return;
     }
+    primaryWaits.clear(identifier);
     if (index === 0) {
       const peerState = await checkPeersRunning();
       if (peerState !== PeerComponent.NOT_RUNNING) {
@@ -699,6 +708,7 @@ async function decideNamed({
   noPrimaryAnnounced.delete(identifier);
   primaryByIdentifier.set(identifier, ip);
   rememberCollateral(identifier, ip);
+  primaryWaits.clear(identifier);
   appNameByIdentifier.set(identifier, appName);
   if (scheduledStart.has(identifier)) {
     log.info(`activeStandby: app:${appName} removed from the scheduled starts, already started on another standby node`);
@@ -1005,6 +1015,7 @@ async function electionPass() {
 /** Forgets every election record; for tests. */
 function resetForTests() {
   forgetRemoved(new Set());
+  primaryWaits.resetForTests();
 }
 
 module.exports = {

@@ -112,6 +112,14 @@ async function peerComponentState(peerSocketAddr, {
       log.info(`${logPrefix}: app:${appName} is held on peer node (${label}) at ${ipToCheck}, will not start`);
       return PeerComponent.RUNNING;
     }
+    // A holder waiting to take the app over from a primary it cannot yet show gone
+    // keeps its turn: it runs nothing, and it cannot be ruled out.
+    const { waiting } = asked.answer;
+    if (Array.isArray(waiting) && holdsAny(waiting)) {
+      fluxEventBus.count('masterSlave:decision', identifier, 'peerWaiting');
+      log.info(`${logPrefix}: peer node (${label}) at ${ipToCheck} is waiting to take app:${appName} over, will not start`);
+      return PeerComponent.UNKNOWN;
+    }
     return PeerComponent.NOT_RUNNING;
   }
   if (asked.verdict === IdentityVerdict.UNREACHABLE) return silent();

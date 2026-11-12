@@ -113,6 +113,31 @@ describe('peerComponent tests', () => {
     });
   });
 
+  describe('a peer that signs what it holds', () => {
+    const PEER = '2.2.2.2:16127';
+    const signed = (answer) => peerIdentityService.askSigned.resolves({
+      verdict: peerIdentityService.IdentityVerdict.VERIFIED, answer,
+    });
+
+    it('cannot be ruled out while it waits to take the app over', async () => {
+      signed({ held: [], decided: [], waiting: [appId] });
+
+      expect(await peerComponentState(PEER, { ...ctx, label: 'index 0' })).to.equal(PeerComponent.UNKNOWN);
+    });
+
+    it('does not hold the app while it waits for another app only', async () => {
+      signed({ held: [], decided: [], waiting: ['fluxw_other'] });
+
+      expect(await peerComponentState(PEER, { ...ctx, label: 'index 0' })).to.equal(PeerComponent.NOT_RUNNING);
+    });
+
+    it('does not hold the app when it answers without saying what it waits for', async () => {
+      signed({ held: [], decided: [] });
+
+      expect(await peerComponentState(PEER, { ...ctx, label: 'index 0' })).to.equal(PeerComponent.NOT_RUNNING);
+    });
+  });
+
   // An app with more than one g: component is held by the node that holds any of
   // them: its primary runs them together.
   describe('an app with more than one g: component', () => {

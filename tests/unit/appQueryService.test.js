@@ -13,6 +13,8 @@ const { installedRecord } = require('./fixtures/appRecords');
 const appsRuntimeState = require('../../ZelBack/src/services/appManagement/appsRuntimeState');
 const appReconciler = require('../../ZelBack/src/services/appMonitoring/appReconciler');
 const globalState = require('../../ZelBack/src/services/utils/globalState');
+const peerIdentityService = require('../../ZelBack/src/services/peerIdentityService');
+const primaryWaits = require('../../ZelBack/src/services/appLifecycle/primaryWaits');
 
 // The spec library is real here, not stubbed — see tests/unit/fixtures/fluxSpec.js.
 // This is the query layer over stored app state, so what appsRepository hands back
@@ -790,6 +792,32 @@ describe('appQueryService tests', () => {
 
       expect(result).to.deep.equal({ status: 'error' });
       expect(messageHelperStub.createDataMessage.called, 'answered with a list built from a failed read').to.be.false;
+    });
+  });
+
+  describe('heldComponentsAnswer', () => {
+    const answer = async () => {
+      dockerServiceStub.dockerListContainers.resolves([]);
+      sinon.stub(appReconciler, 'committedIdentifiers').returns([]);
+      sinon.stub(appsRuntimeState, 'operatorHeldIdentifiers').resolves([]);
+      sinon.stub(peerIdentityService, 'answerSealer').returns(async (payload) => payload);
+      messageHelperStub.createDataMessage.returnsArg(0);
+      const res = { json: sinon.stub().returnsArg(0) };
+      return appQueryService.heldComponentsAnswer({ body: {} }, res);
+    };
+
+    afterEach(() => primaryWaits.resetForTests());
+
+    it('tells a peer the components it waits to take over, apart from what it holds', async () => {
+      primaryWaits.wait('db_App');
+
+      expect(await answer()).to.deep.equal({ held: [], decided: [], waiting: ['db_App'] });
+    });
+
+    it('waits for nothing once the wait has lapsed', async () => {
+      primaryWaits.wait('db_App', Date.now() - primaryWaits.ELECTION_RECORD_STALE_MS);
+
+      expect((await answer()).waiting).to.deep.equal([]);
     });
   });
 

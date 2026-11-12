@@ -15,6 +15,7 @@ const { Privilege, authOf } = require('../utils/privileges');
 const { socketAddressesMatch } = require('../utils/socketAddressUtils');
 const peerIdentityService = require('../peerIdentityService');
 const primaryRoleChanges = require('../appLifecycle/primaryRoleChanges');
+const primaryWaits = require('../appLifecycle/primaryWaits');
 const folderStates = require('../appMonitoring/folderStates');
 const syncthingService = require('../syncthingService');
 const operationRegistry = require('../utils/operationRegistry');
@@ -369,6 +370,7 @@ async function holdingsAccount() {
   return {
     decided: withAnchors(decided, apps),
     held: withAnchors([...decided, ...sending], apps),
+    waiting: withAnchors(primaryWaits.waitingIdentifiers().map((identifier) => dockerService.getAppIdentifier(identifier)), apps),
   };
 }
 
@@ -463,7 +465,7 @@ async function heldComponentsAnswer(req, res) {
       if (!account) return res.json(notKnownYet());
       heldForPeers = { ...account, at: now };
     }
-    return res.json(messageHelper.createDataMessage(await seal({ held: heldForPeers.held, decided: heldForPeers.decided })));
+    return res.json(messageHelper.createDataMessage(await seal({ held: heldForPeers.held, decided: heldForPeers.decided, waiting: heldForPeers.waiting })));
   } catch (error) {
     log.error(error);
     return res.json(messageHelper.createErrorMessage(error.message || error, error.name, error.code));
