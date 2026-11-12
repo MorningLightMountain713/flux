@@ -15,6 +15,7 @@ import { authenticate } from '../auth.js';
 import { appOwnerKey } from '../framework/keys.js';
 import { gComponent, watchGComponents } from '../framework/g-components.js';
 import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
+import { NotPresentError } from '../framework/errors.js';
 
 // Trimming a surplus copy of an app with two single-writer (g:) components, when
 // the copy the surplus rule picks - the newest - is the app's primary, running its
@@ -153,7 +154,11 @@ describe('a surplus trim keeps the copy running any g: component', function () {
     });
     held = stub.holdApp(appName, { hash: app.hash, runningSince: Date.now() - 24 * 60 * 60 * 1000 });
     await held.started;
-    await Promise.all(HOLDERS.map((i) => waitFor(async () => (await order(i)).length === 3, {
+    await Promise.all(HOLDERS.map((i) => waitFor(async () => {
+      const seen = await order(i);
+      if (seen.length !== 3) throw new NotPresentError(`holder ${i} lists ${JSON.stringify(seen)}`);
+      return true;
+    }, {
       timeout: 120000, interval: 2000, label: `holder ${i} counts the stub as a third holder`,
     })));
   });
