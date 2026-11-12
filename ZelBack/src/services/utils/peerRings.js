@@ -191,6 +191,28 @@ class PeerRings {
   }
 
   /**
+   * Which end of a mutual pair dials it. A pair is mutual when each is in the
+   * other's jury, so both owe it a duty and it holds one connection: the one
+   * opened by the node that has the other in the forward half of ring 0, and at
+   * the antipode of an even ring by the lower outpoint. Over a full mesh every
+   * node dials floor((N-1)/2) or ceil((N-1)/2) of its pairs. A pure function of
+   * the list, so both ends agree.
+   *
+   * @param {RingNode} a
+   * @param {RingNode} b
+   * @returns {string|null} the dialer's key, or null when the pair is not mutual
+   */
+  designatedDialer(a, b) {
+    if (!this.jury(b).some((node) => node.key === a.key)) return null;
+    if (!this.jury(a).some((node) => node.key === b.key)) return null;
+    const n = this.#nodes.length;
+    const forward = (((this.#ringPos[0].get(b.key) - this.#ringPos[0].get(a.key)) % n) + n) % n;
+    if (2 * forward < n) return a.key;
+    if (2 * forward > n) return b.key;
+    return a.outpoint < b.outpoint ? a.key : b.key;
+  }
+
+  /**
    * Deterministic top-up targets — successors, walked the opposite way to a jury,
    * one per ring, distinct addresses. Scanned rather than abandoned so the
    * floor stays reachable when early candidates are excluded.

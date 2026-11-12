@@ -47,6 +47,11 @@ const FLUX_CAPABILITIES = Object.freeze([
   // last naming the hashes it does not hold. A peer that does not claim it is
   // asked by v2, one message per hash.
   'appMessageBatch',
+  // This build dials a mutual duty only when it is the pair's designated dialer
+  // (PeerRings.designatedDialer), and lets go of a connection it opened to a pair
+  // the peer dials. A peer that does not claim it keeps whichever connection
+  // established first.
+  'designatedDialer',
 ]);
 
 module.exports = { FLUX_CAPABILITIES };

@@ -892,6 +892,7 @@ function start(injectedTransport) {
     resolveOutpoint,
     isHeld: (socketAddress) => transport.peerManager.has(socketAddress),
     heldDirection: (socketAddress) => transport.peerManager.get(socketAddress)?.direction ?? null,
+    peerAdvertises: (socketAddress, capability) => Boolean(transport.peerManager.get(socketAddress)?.remoteCapabilities?.has(capability)),
     mayDial: (socketAddress) => transport.peerManager.shouldAttemptConnection(
       extractIp(socketAddress),
       socketAddress.split(':')[1],

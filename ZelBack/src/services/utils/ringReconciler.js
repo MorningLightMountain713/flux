@@ -35,7 +35,14 @@ const DUTY_STATE = Object.freeze({
   // The network certified this duty down: not dialed, counts for nothing,
   // a substitute covers the slot until the subject returns.
   STOOD_DOWN: 'stood_down',
+  // A mutual duty the peer is the designated dialer of, and dials by that rule:
+  // not dialed here, counts for nothing toward this node's outbound.
+  PEER_DIALS: 'peer_dials',
 });
+
+// The capability a peer advertises when it dials a mutual duty only as the
+// pair's designated dialer.
+const DESIGNATED_DIALER = 'designatedDialer';
 
 class RingReconciler {
   /** @type {object} */
@@ -52,6 +59,9 @@ class RingReconciler {
 
   /** @type {Map<string, number>} outpoint → failed dials in a row */
   #failedDials = new Map();
+
+  /** @type {Set<string>} duties whose peer advertised DESIGNATED_DIALER while held */
+  #peerDialsByRule = new Set();
 
   #passRunning = false;
 
@@ -93,6 +103,8 @@ class RingReconciler {
    *   held failed REPEATED_DIAL_FAILURES dials or more in a row
    * @param {(outpoint: string) => void} [deps.noteContact] the duty was dialed or is
    *   held this pass — the ladder's clock
+   * @param {(socketAddress: string, capability: string) => boolean} [deps.peerAdvertises]
+   *   the held peer at the address advertised the capability
    * @param {object} [options]
    * @param {number} [options.floor] outbound connection floor
    * @param {number} [options.releaseMargin] hysteresis above the floor
@@ -277,6 +289,30 @@ class RingReconciler {
         current.set(duty.outpoint, { state: DUTY_STATE.STOOD_DOWN, socketAddress, writtenOff: true });
         return;
       }
+      // A mutual duty the peer is the designated dialer of is the peer's to open,
+      // once the peer has shown it dials by that rule: not dialed here, and a
+      // connection this node opened to it is let go for the peer's. A peer not
+      // known to follow the rule is dialed as any duty is.
+      if (topology.designatedDialer && topology.designatedDialer(myOutpoint, duty.outpoint) === 'peer') {
+        if (this.#deps.isHeld(socketAddress)) {
+          if (this.#deps.peerAdvertises && this.#deps.peerAdvertises(socketAddress, DESIGNATED_DIALER)) {
+            this.#peerDialsByRule.add(duty.outpoint);
+          } else {
+            this.#peerDialsByRule.delete(duty.outpoint);
+          }
+        }
+        if (this.#peerDialsByRule.has(duty.outpoint)) {
+          if (this.#deps.isHeld(socketAddress) && this.#deps.heldDirection(socketAddress) === 'outbound') {
+            this.#deps.drop(socketAddress, 'mutual duty: the peer is its designated dialer');
+            current.set(duty.outpoint, { state: DUTY_STATE.PEER_DIALS, socketAddress, writtenOff: true });
+            return;
+          }
+          if (!this.#deps.isHeld(socketAddress)) {
+            current.set(duty.outpoint, { state: DUTY_STATE.PEER_DIALS, socketAddress, writtenOff: true });
+            return;
+          }
+        }
+      }
       if (this.#deps.isHeld(socketAddress)) {
         current.set(duty.outpoint, { state: DUTY_STATE.CONNECTED, socketAddress, writtenOff: false });
         this.#noteDutyHeld(duty.outpoint);
@@ -313,7 +349,7 @@ class RingReconciler {
       }
     });
     this.#duties = current;
-    for (const records of [this.#dutiesHeld, this.#failedDials]) {
+    for (const records of [this.#dutiesHeld, this.#failedDials, this.#peerDialsByRule]) {
       for (const outpoint of records.keys()) {
         if (!current.has(outpoint)) records.delete(outpoint);
       }
@@ -379,4 +415,5 @@ class RingReconciler {
 module.exports = {
   RingReconciler,
   DUTY_STATE,
+  DESIGNATED_DIALER,
 };

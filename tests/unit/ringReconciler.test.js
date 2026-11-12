@@ -13,9 +13,15 @@ const tick = () => new Promise((resolve) => { setImmediate(() => setImmediate(re
 
 // Every side effect faked: dials resolve only when the test says so, so the
 // pending/connected/failed accounting is driven explicitly.
-function makeWorld({ duties = [], jury = [], successors = [] } = {}) {
+function makeWorld({
+  duties = [], jury = [], successors = [], peerDials = [], advertises = [],
+} = {}) {
   const world = {
     duties: [...duties],
+    // duties whose pair the peer is the designated dialer of, and the peers
+    // advertising that they dial by the rule
+    peerDials: new Set(peerDials),
+    advertises: new Set(advertises),
     jury: [...jury],
     successors: [...successors],
     held: new Map(), // socketAddress -> 'outbound' | 'inbound'
@@ -30,6 +36,7 @@ function makeWorld({ duties = [], jury = [], successors = [] } = {}) {
   world.deps = {
     topology: () => ({
       duties: () => (world.listed ? asNodes(world.duties) : null),
+      designatedDialer: (me, other) => (world.peerDials.has(other) ? 'peer' : 'self'),
       jury: () => asNodes(world.jury),
       ringSuccessors: (me, want, exclude) => {
         const picked = [];
@@ -55,6 +62,7 @@ function makeWorld({ duties = [], jury = [], successors = [] } = {}) {
     },
     ask: (socketAddress) => world.asks.push(socketAddress),
     inboundCount: () => world.inbound,
+    peerAdvertises: (socketAddress) => world.advertises.has(socketAddress),
   };
   return world;
 }
@@ -439,6 +447,56 @@ describe('ringReconciler', () => {
       const gaps = dialHeights.slice(1).map((at, i) => at - dialHeights[i]);
       gaps.forEach((gap) => expect(gap).to.be.at.most(FLAP_WINDOW_BLOCKS + 7));
       expect(ladder.snapshot('x:0').damped).to.equal(true); // still parked: the dials are the floor, not a lift
+    });
+  });
+
+  describe('a mutual duty the peer is the designated dialer of', () => {
+    it('lets go of a connection it opened to a peer that dials by the rule, and does not dial it again', async () => {
+      const world = makeWorld({ duties: ['p:0'], peerDials: ['p:0'], advertises: ['addr-p:0'] });
+      world.inbound = 99;
+      world.held.set('addr-p:0', 'outbound');
+      reconciler = makeReconciler(world);
+      await tick();
+
+      expect(world.drops).to.deep.equal(['addr-p:0']);
+      await reconciler.schedule('peer-removed');
+      await tick();
+      expect(world.dials.map((d) => d.socketAddress)).to.not.include('addr-p:0');
+      expect(reconciler.snapshot().duties['p:0']).to.equal('peer_dials');
+    });
+
+    it('keeps the connection the peer opened, and counts it toward no outbound', async () => {
+      const world = makeWorld({ duties: ['p:0'], peerDials: ['p:0'], advertises: ['addr-p:0'] });
+      world.inbound = 99;
+      world.held.set('addr-p:0', 'inbound');
+      reconciler = makeReconciler(world);
+      await tick();
+
+      expect(world.drops).to.deep.equal([]);
+      expect(world.dials).to.deep.equal([]);
+      expect(reconciler.snapshot().outboundStanding).to.equal(0);
+    });
+
+    it('dials a peer it has not seen advertise the rule, and keeps a connection to one that does not follow it', async () => {
+      const world = makeWorld({ duties: ['p:0', 'q:0'], peerDials: ['p:0', 'q:0'] });
+      world.inbound = 99;
+      world.held.set('addr-q:0', 'outbound');
+      reconciler = makeReconciler(world);
+      await tick();
+
+      expect(world.dials.map((d) => d.socketAddress)).to.deep.equal(['addr-p:0']);
+      expect(world.drops).to.deep.equal([]);
+      expect(reconciler.snapshot().duties['q:0']).to.equal('connected');
+    });
+
+    it('dials the mutual duties it is the designated dialer of', async () => {
+      const world = makeWorld({ duties: ['me1:0', 'p:0'], peerDials: ['p:0'], advertises: ['addr-p:0'] });
+      world.inbound = 99;
+      world.held.set('addr-p:0', 'inbound');
+      reconciler = makeReconciler(world);
+      await tick();
+
+      expect(world.dials.map((d) => d.socketAddress)).to.deep.equal(['addr-me1:0']);
     });
   });
 

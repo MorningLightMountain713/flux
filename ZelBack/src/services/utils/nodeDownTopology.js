@@ -136,6 +136,25 @@ class NodeDownTopology {
   }
 
   /**
+   * Which end of a mutual pair dials it, on the CURRENT membership
+   * (PeerRings.designatedDialer).
+   *
+   * @param {string} myOutpoint
+   * @param {string} otherOutpoint
+   * @returns {'self'|'peer'|null} null when either is off the list or the pair
+   *   is not mutual
+   */
+  designatedDialer(myOutpoint, otherOutpoint) {
+    const view = this.#currentView();
+    const me = view.byOutpoint.get(myOutpoint);
+    const other = view.byOutpoint.get(otherOutpoint);
+    if (!me || !other) return null;
+    const dialer = view.rings.designatedDialer(me, other);
+    if (dialer === null) return null;
+    return dialer === me.key ? 'self' : 'peer';
+  }
+
+  /**
    * Deterministic non-witness top-up targets on the CURRENT membership
    * MUTATES `exclude`, as the walk requires.
    *

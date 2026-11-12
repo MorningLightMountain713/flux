@@ -123,3 +123,48 @@ describe('peerRings conformance (fixture: rings-fixture.json)', () => {
     });
   });
 });
+
+describe('peerRings designatedDialer', () => {
+  // A list of n nodes, each its own owner at its own address.
+  const fleet = (n) => Array.from({ length: n }, (_, i) => {
+    const outpoint = `${String(i).padStart(64, 'a')}:0`;
+    return {
+      key: outpoint, outpoint, owner: `owner${i}`, addr: `10.0.0.${i + 1}`,
+    };
+  });
+
+  it('names one dialer for every mutual pair, the same from both ends, over 3 to 20 nodes', () => {
+    for (let n = 3; n <= 20; n += 1) {
+      const nodes = fleet(n);
+      const rings = new PeerRings(nodes);
+      nodes.forEach((a) => nodes.forEach((b) => {
+        if (a.key === b.key) return;
+        const mutual = rings.jury(a).some((x) => x.key === b.key) && rings.jury(b).some((x) => x.key === a.key);
+        const dialer = rings.designatedDialer(a, b);
+        expect(dialer, `n=${n}`).to.equal(rings.designatedDialer(b, a));
+        if (mutual) expect([a.key, b.key], `n=${n}`).to.include(dialer);
+        else expect(dialer, `n=${n}, a pair that is not mutual`).to.equal(null);
+      }));
+    }
+  });
+
+  it('gives every node of a full mesh floor((N-1)/2) or ceil((N-1)/2) pairs to dial', () => {
+    for (let n = 3; n <= 15; n += 1) {
+      const nodes = fleet(n);
+      const rings = new PeerRings(nodes);
+      nodes.forEach((a) => {
+        const dials = nodes.filter((b) => b.key !== a.key && rings.designatedDialer(a, b) === a.key).length;
+        expect(dials, `n=${n}`).to.be.within(Math.floor((n - 1) / 2), Math.ceil((n - 1) / 2));
+      });
+    }
+  });
+
+  it('names the same dialer whatever order the list is given in', () => {
+    const nodes = fleet(9);
+    const forward = new PeerRings(nodes);
+    const reversed = new PeerRings([...nodes].reverse());
+    nodes.forEach((a) => nodes.forEach((b) => {
+      if (a.key !== b.key) expect(reversed.designatedDialer(a, b)).to.equal(forward.designatedDialer(a, b));
+    }));
+  });
+});

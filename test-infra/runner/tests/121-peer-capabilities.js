@@ -15,7 +15,7 @@ import { restartFluxos } from '../framework/container.js';
 const FLUX_CAPABILITIES = [
   'transmissionTimestamps', 'peerExchange', 'binaryMessages', 'appStateSync', 'appStateSyncRefusal',
   'appStateSyncReady', 'appInstallingClaims', 'limitCounterRecords', 'masterlease', 'syncSigV2', 'policyBundle',
-  'processStop', 'appMessageBatch',
+  'processStop', 'appMessageBatch', 'designatedDialer',
 ];
 
 // MSG_TYPE.REQUEST_APP_RUNNING — one of the four types a signed sync request
