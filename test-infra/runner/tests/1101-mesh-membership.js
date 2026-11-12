@@ -31,9 +31,9 @@ import { REGISTRY_REPO_HOST } from '../framework/subnet-config.js';
 //      re-admits it from the stored broadcast with no new gossip.
 //   4. FRESHNESS is enforced — advance the chain past the anchor window and
 //      the stored vouchers stop being believed (reason: stale-anchor).
-// The overlay units are absent here by design (no systemd): the runtime stage
-// retries each pass exactly as production would on a node whose units are
-// missing, and unitActive stays false. Suites 1102/1103 run the data plane.
+// The nodes run systemd and the mesh runtime, so each node's overlay unit runs as
+// it does in production (unitActive true); suites 1102/1103 test the data plane
+// it carries.
 
 const MESH_PORT_MIN = 16226;
 const MESH_PORT_MAX = 16299;
@@ -151,7 +151,7 @@ describe('mesh membership across a multi-node fleet', function () {
       expect(s.data.port).to.be.within(MESH_PORT_MIN, MESH_PORT_MAX);
       expect(s.data.certificates.authority, 'authority certificate').to.not.equal(null);
       expect(s.data.certificates.host, 'host certificate').to.not.equal(null);
-      expect(s.data.unitActive).to.equal(false);
+      expect(s.data.unitActive).to.equal(true);
       expect(s.data.refused).to.deep.equal([]);
     }
   });
