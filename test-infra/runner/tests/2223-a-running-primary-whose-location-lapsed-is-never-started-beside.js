@@ -13,7 +13,6 @@ import {
 } from '../framework/wait.js';
 import { bootAndPeer, installOnNodes, seedSyncScopedData } from '../framework/reconciler-suite.js';
 import { isDaemonUp, listFolderFiles } from '../framework/syncthing-real.js';
-import { dbClient } from '../framework/db-client.js';
 import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 
 // A primary's FluxOS dies without announcing a shutdown. Its container and its
@@ -108,8 +107,8 @@ describe('a running primary whose location lapsed is never started beside', func
       // eslint-disable-next-line no-await-in-loop
       const up = await Promise.all([A, B, C].map((i) => isUp(i).catch(() => null)));
       // eslint-disable-next-line no-await-in-loop
-      const rows = await dbClient(A + 1).getAppLocations(appName).catch(() => null);
-      if (Array.isArray(rows) && !rows.some((row) => String(row.ip).split(':')[0] === bIp)) lapsed = true;
+      const atB = await client(A).getAppLocationsAt(appName, bIp).catch(() => null);
+      if (Array.isArray(atB) && atB.length === 0) lapsed = true;
       samples.push({ at: Date.now(), up });
       // eslint-disable-next-line no-await-in-loop
       await new Promise((resolve) => { setTimeout(resolve, 5000); });

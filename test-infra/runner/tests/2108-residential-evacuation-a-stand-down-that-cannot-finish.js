@@ -42,7 +42,7 @@ describe('Residential node evacuation: a stand-down that cannot finish', functio
     await setSynced({ folder });
     await setPeerHasData({ folder });
     await advanceBlocks(3);
-    await waitFor(async () => (await dbClient(2).getAppLocations(appName)).length >= 5,
+    await waitFor(async () => (await env.clients[1].appLocationRows(appName)).length >= 5,
       { timeout: 300000, label: `${appName} reaches its instance count across the fleet` });
     await waitFor(async () => (await runningComponents(env, TARGET)).includes(folder),
       { timeout: 300000, label: 'the elected primary is running the activeStandby component' });

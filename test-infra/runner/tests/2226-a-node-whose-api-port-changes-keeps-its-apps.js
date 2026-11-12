@@ -101,7 +101,7 @@ describe('a node whose api port changes keeps its apps', function () {
     // A move carries only the rows standing at the address it leaves: a peer that does
     // not yet hold the app there refuses it.
     const oldSocket = `${nodeIp}:${OLD_PORT}`;
-    const holdsAtOldPort = async (i) => (await dbClient(i + 1).getAppLocations(appName)).some((row) => row.ip === oldSocket);
+    const holdsAtOldPort = async (i) => (await env.clients[i].appLocationRows(appName)).some((row) => row.ip === oldSocket);
     await waitFor(async () => (await Promise.all([0, 1, 2].map(holdsAtOldPort))).every(Boolean), {
       timeout: 120000, interval: 3000, label: 'every node holds the app at the old port',
     });
@@ -148,12 +148,12 @@ describe('a node whose api port changes keeps its apps', function () {
     await new Promise((resolve) => { setTimeout(resolve, WATCHED_MS); });
 
     expect(await isUp(), 'the app still runs on the node that moved').to.equal(true);
-    const rows = await dbClient(idx + 1).getAppLocations(appName);
+    const rows = await env.clients[idx].appLocationRows(appName);
     expect(rows.map((row) => row.ip), 'the node\'s own rows for the app').to.deep.equal([`${nodeIp}:${NEW_PORT}`]);
     // eslint-disable-next-line no-restricted-syntax
     for (const peer of [0, 1, 2].filter((i) => i !== idx)) {
       // eslint-disable-next-line no-await-in-loop
-      const held = await dbClient(peer + 1).getAppLocations(appName);
+      const held = await env.clients[peer].appLocationRows(appName);
       expect(held.map((row) => row.ip), `node ${peer}'s rows for the app`).to.deep.equal([`${nodeIp}:${NEW_PORT}`]);
     }
   });

@@ -707,6 +707,13 @@ export function nodeClient(nodeNum) {
     setDOSState: (dosState, dosMessage, zelidauth) =>
       post('/flux/dosstate', { dosState, dosMessage }, { zelidauth }),
     getAppLocations: (name) => get(`/apps/location/${name}`),
+    // This node's location rows of one app, read now. A refusal throws, so a wait
+    // on it asks again.
+    appLocationRows: async (name) => {
+      const res = await get(`/apps/location/${name}`, { noCache: true });
+      if (res.status !== 'success' || !Array.isArray(res.data)) throw new Error(`/apps/location/${name} answered ${JSON.stringify(res).slice(0, 200)}`);
+      return res.data;
+    },
     // This node's locations of one app at one socket address, read now.
     getAppLocationsAt: async (name, address) => {
       const bare = (ip) => ip.replace(/:16127$/, '');

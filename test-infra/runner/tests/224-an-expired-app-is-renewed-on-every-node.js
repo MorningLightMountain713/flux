@@ -144,8 +144,8 @@ describe('an expired app is renewed by an update, on every node alike', function
     // Canary: the observer holds each holder's location row before the expiry, so its absence
     // afterwards is the removal.
     await waitFor(async () => {
-      const late = await dbClient(OBSERVER + 1).getAppLocations(lateName);
-      const owner = await dbClient(OBSERVER + 1).getAppLocations(ownerName);
+      const late = await env.clients[OBSERVER].appLocationRows(lateName);
+      const owner = await env.clients[OBSERVER].appLocationRows(ownerName);
       return late.some((r) => ipOf(r.ip) === holderIp(HOLDER_LATE)) && owner.some((r) => ipOf(r.ip) === holderIp(HOLDER_OWNER));
     }, { timeout: 90000, interval: 2000, label: `node ${OBSERVER} holds both holders' location rows` });
 

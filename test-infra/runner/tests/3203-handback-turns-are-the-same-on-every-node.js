@@ -41,7 +41,7 @@ async function seedAndEvacuate(env, appName, nodes) {
   await Promise.all(FLEET.map((node) => returnToService(env, node)));
   await seedApp(env, appName, { instances: FLEET.length });
   await startTicker();
-  await waitFor(async () => (await dbClient(2).getAppLocations(appName)).length >= FLEET.length,
+  await waitFor(async () => (await env.clients[1].appLocationRows(appName)).length >= FLEET.length,
     { timeout: 300000, label: `${appName} reaches its instance count across the fleet` });
   await Promise.all(nodes.map((node) => setSystemSecure(subnet.nodeIp(node), false)));
   await Promise.all(nodes.map((node) => waitFor(
@@ -240,7 +240,7 @@ describe('handback turns are the same on every node', function () {
     const one = env.clients[TARGET - 1];
     await seedAndEvacuate(env, 'evictapp', [TARGET]);
     const evicted = `${subnet.nodeIp(4)}:16127`;
-    const missing = async () => !(await dbClient(TARGET).getAppLocations('evictapp')).some((l) => l.ip === evicted);
+    const missing = async () => !(await env.clients[TARGET - 1].appLocationRows('evictapp')).some((l) => l.ip === evicted);
 
     // An eviction a peer passed on in a sync: unsigned, and the rows it covers gone.
     // Bracketed, because the evicted node's next announcement puts its row back.

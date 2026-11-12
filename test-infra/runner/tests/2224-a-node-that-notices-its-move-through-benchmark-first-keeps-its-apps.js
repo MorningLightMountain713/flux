@@ -119,12 +119,12 @@ describe('a node that notices its move through benchmark first keeps its apps', 
     await new Promise((resolve) => { setTimeout(resolve, WATCHED_MS); });
 
     expect(await isUp(), 'the app still runs on the node that moved').to.equal(true);
-    const rows = await dbClient(idx + 1).getAppLocations(appName);
+    const rows = await env.clients[idx].appLocationRows(appName);
     expect(rows.map((row) => String(row.ip).split(':')[0]), 'the node\'s own rows for the app').to.deep.equal([movedIp]);
     // eslint-disable-next-line no-restricted-syntax
     for (const peer of [0, 1, 2].filter((i) => i !== idx)) {
       // eslint-disable-next-line no-await-in-loop
-      const held = await dbClient(peer + 1).getAppLocations(appName);
+      const held = await env.clients[peer].appLocationRows(appName);
       expect(held.map((row) => String(row.ip).split(':')[0]), `node ${peer}'s rows for the app`).to.deep.equal([movedIp]);
     }
   });
