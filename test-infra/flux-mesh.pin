@@ -1,0 +1,6 @@
+# The app mesh runtime the harness's nodes install: the RunOnFlux/flux-mesh release the
+# ArcaneOS image installs (Nebula, Tayga, the flux-mesh@ and flux-mesh-tayga@ units, their
+# AppArmor profiles). Shell-sourceable: plain VAR=value lines only.
+FLUX_MESH_VERSION=0.1.2
+FLUX_MESH_SHA256_AMD64=536580d426bdb75d832b53a8c3e7b0196505606bad3d7e803a9257facbd622a3
+FLUX_MESH_SHA256_ARM64=bd0dd6145e7c52f56b927c8c1a1c13084e1c5d24e9336027ec2de0d69ceabb01

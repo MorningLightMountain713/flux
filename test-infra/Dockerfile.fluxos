@@ -1,16 +1,3 @@
-# Tayga (the mesh IPv4 shim) builds from source at the pinned commit; the
-# toolchain stays in this throwaway stage.
-FROM ubuntu:26.04 AS tayga-build
-ENV DEBIAN_FRONTEND=noninteractive
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    git ca-certificates make gcc libc6-dev \
-    && rm -rf /var/lib/apt/lists/*
-COPY test-infra/mesh_bins.pins /tmp/mesh_bins.pins
-RUN . /tmp/mesh_bins.pins \
-    && git clone "$TAYGA_REPO" /tmp/tayga \
-    && git -C /tmp/tayga checkout "$TAYGA_COMMIT" \
-    && make -C /tmp/tayga tayga
-
 FROM ubuntu:26.04 AS base
 
 # Where the base packages come from. Canonical by default, so an unset build changes
@@ -75,22 +62,22 @@ RUN set -eu; \
 RUN ln -s "$(dpkg -L libfaketime | grep '/libfaketime.so.1$')" /usr/local/lib/libfaketime.so.1 \
     && test -e /usr/local/lib/libfaketime.so.1
 
-# The mesh data plane: nebula + nebula-cert at the version FluxOS requires,
-# fetched from the upstream release and verified against the pins the harness
-# shares with the OS image (test-infra/mesh_bins.pins).
-COPY test-infra/mesh_bins.pins /tmp/mesh_bins.pins
-RUN . /tmp/mesh_bins.pins \
+# The mesh runtime: the RunOnFlux/flux-mesh release the ArcaneOS image installs (Nebula,
+# Tayga, the flux-mesh@ and flux-mesh-tayga@ units, their AppArmor profiles), pinned in
+# test-infra/flux-mesh.pin.
+COPY test-infra/flux-mesh.pin /tmp/flux-mesh.pin
+RUN . /tmp/flux-mesh.pin \
     && ARCH="$(dpkg --print-architecture)" \
     && case "$ARCH" in \
-         amd64) NEBULA_SHA256="$NEBULA_SHA256_AMD64" ;; \
-         arm64) NEBULA_SHA256="$NEBULA_SHA256_ARM64" ;; \
-         *) echo "no pinned nebula checksum for architecture $ARCH" >&2; exit 1 ;; \
+         amd64) SHA256="$FLUX_MESH_SHA256_AMD64" ;; \
+         arm64) SHA256="$FLUX_MESH_SHA256_ARM64" ;; \
+         *) echo "no pinned flux-mesh for architecture $ARCH" >&2; exit 1 ;; \
        esac \
-    && curl -fsSL -o /tmp/nebula.tar.gz "https://github.com/slackhq/nebula/releases/download/${NEBULA_VERSION}/nebula-linux-${ARCH}.tar.gz" \
-    && echo "${NEBULA_SHA256}  /tmp/nebula.tar.gz" | sha256sum --check --status \
-    && tar -xzf /tmp/nebula.tar.gz -C /usr/bin nebula nebula-cert \
-    && rm /tmp/nebula.tar.gz /tmp/mesh_bins.pins
-COPY --from=tayga-build /tmp/tayga/tayga /usr/bin/tayga
+    && DEB="flux-mesh_${FLUX_MESH_VERSION}-1_${ARCH}.deb" \
+    && curl -fsSL -o "/tmp/$DEB" "https://github.com/RunOnFlux/flux-mesh/releases/download/v${FLUX_MESH_VERSION}/$DEB" \
+    && echo "${SHA256}  /tmp/$DEB" | sha256sum --check --status \
+    && dpkg -i "/tmp/$DEB" \
+    && rm "/tmp/$DEB" /tmp/flux-mesh.pin
 
 # The node's docker: the newest release unless DOCKER_VERSION names one, as apt
 # spells it (5:27.5.1-1~ubuntu.24.04~noble), for a run against an older docker.

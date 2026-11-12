@@ -51,6 +51,9 @@ mkdir -p /dat/var/lib/fluxd \
          /dat/usr/lib/fluxbenchd \
          /dat/usr/lib/fluxwatchdog \
          /mnt/appdata/flux-apps
+# /dat is a mount on a node, and the mesh units run only while dat.mount is active: a bind
+# of /dat onto itself gives systemd that mount here.
+mountpoint -q /dat || mount --bind /dat /dat
 
 # A node whose apps folder is reached through a symlink: FLUX_APPS_FOLDER names
 # the link, and this points it at the real folder.
