@@ -2,6 +2,7 @@
 import { describe, it, before, after } from 'mocha';
 import { expect } from 'chai';
 import { dbClient } from '../framework/db-client.js';
+import { componentIdentifier, folderIdOf } from '../framework/container.js';
 import {
   advanceBlocks, driveUntil, startTicker, stopTicker, setSystemSecure, clearSystemSecure,
 } from '../framework/daemon-control.js';
@@ -35,16 +36,17 @@ describe('Residential node evacuation: a stand-down that cannot finish', functio
 
   /** Node TARGET, the elected primary of a fresh g: app, drains until it stands down. */
   async function standDown(appName) {
-    const folder = `flux${appName}_${appName}`;
     await returnToService(env, TARGET);
     await electMaster(appName, subnet.nodeIp(TARGET));
-    await seedApp(env, appName, { instances: 5, syncMode: 'activeStandby' });
+    const app = await seedApp(env, appName, { instances: 5, syncMode: 'activeStandby' });
+    const folder = folderIdOf(app, appName);
+    const identifier = componentIdentifier(app, appName);
     await setSynced({ folder });
     await setPeerHasData({ folder });
     await advanceBlocks(3);
     await waitFor(async () => (await env.clients[1].appLocationRows(appName)).length >= 5,
       { timeout: 300000, label: `${appName} reaches its instance count across the fleet` });
-    await waitFor(async () => (await runningComponents(env, TARGET)).includes(folder),
+    await waitFor(async () => (await runningComponents(env, TARGET)).includes(identifier),
       { timeout: 300000, label: 'the elected primary is running the activeStandby component' });
 
     await setSystemSecure(subnet.nodeIp(TARGET), false);
@@ -58,19 +60,19 @@ describe('Residential node evacuation: a stand-down that cannot finish', functio
       && e.data?.appName === appName);
     await stopTicker();
     await driveUntil(client, async () => stoodDown() !== undefined, { timeoutMs: departureWaitMs([TARGET]) });
-    return { event: stoodDown(), folder };
+    return { event: stoodDown(), folder, identifier };
   }
 
   it('stands for election again once it has owned a turn since without being able to leave', async function () {
     this.timeout(900000);
     const client = env.clients[TARGET - 1];
-    const { event, folder } = await standDown('releaseapp');
+    const { event, folder, identifier } = await standDown('releaseapp');
     // No peer holds the folder any more, so its next owned turn cannot remove.
     await setNoPeerData({ folder });
     const stoodDownTurn = client.getEventBuffer()
       .filter((e) => e.event === 'giveUp:turn' && e.data?.appName === 'releaseapp' && e.id < event.id).pop().data.turn;
     const released = () => client.getEventBuffer().find((e) => e.id > event.id && e.event === 'giveUp:standDownReleased'
-      && e.data?.identifier === 'releaseapp_releaseapp');
+      && e.data?.identifier === identifier);
 
     await driveUntil(client, async () => released() !== undefined, {
       timeoutMs: untilOwnedTurnEndsMs({
@@ -96,10 +98,10 @@ describe('Residential node evacuation: a stand-down that cannot finish', functio
   it('stands for election again once the node stops evacuating', async function () {
     this.timeout(900000);
     const client = env.clients[TARGET - 1];
-    const { event } = await standDown('returnapp');
+    const { event, identifier } = await standDown('returnapp');
     await setSystemSecure(subnet.nodeIp(TARGET), true);
     const released = () => client.getEventBuffer().find((e) => e.id > event.id && e.event === 'giveUp:standDownReleased'
-      && e.data?.identifier === 'returnapp_returnapp');
+      && e.data?.identifier === identifier);
 
     await driveUntil(client, async () => released() !== undefined, { timeoutMs: 120000 + (2 * PASS_MS) });
     await startTicker();
