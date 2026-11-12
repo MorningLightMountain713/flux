@@ -5,6 +5,7 @@ const serviceHelper = require('./serviceHelper');
 const fluxNetworkHelper = require('./fluxNetworkHelper');
 const verificationHelper = require('./verificationHelper');
 const { serialiseAndSignFluxBroadcast } = require('./utils/fluxBroadcastHelper');
+const { BOOT_STEP_RETRY_MS } = require('./utils/untilSucceeds');
 const networkStateService = require('./networkStateService');
 const nodeConfirmationService = require('./nodeConfirmationService');
 const nodeDownStore = require('./appMessaging/nodeDownStore');
@@ -49,6 +50,8 @@ let unreachableSinceMs = null;
 let returnNoticed = false;
 // The grace, armed at the loss: the live-isolation clock.
 let isolationTimer = null;
+// The placement question asked again while it is unanswered.
+let placementRetryTimer = null;
 let dropHandler = null;
 let addHandler = null;
 let answerHandler = null;
@@ -474,27 +477,39 @@ function setPlacementCheck(check) {
  * The return rule, run after the store is current: the node asks its own
  * derived rows whether they still place it. Placed: keep every app and
  * announce them. Not placed: every app is removed inside the check and no
- * app is announced. A check that throws announces, as before: nothing here
- * may be the reason an app is deleted. On a return or a certificate the node
- * also sends its alive record either way, which refutes the certificates
- * about it; a lockout holds the stand-down open, so it sends none.
+ * app is announced. Unanswered - the rows cannot be read, or the check
+ * throws - decides nothing either way: no app is removed and nothing is
+ * announced, since an announcement refutes the certificates about this node
+ * and so keeps its rows on every node, and the question is asked again every
+ * BOOT_STEP_RETRY_MS until it is answered. On a return or a certificate the
+ * node also sends its alive record once answered, which refutes the
+ * certificates about it; a lockout holds the stand-down open, so it sends none.
  *
  * @param {string} trigger 'return' | 'certificate' | 'lockout'
  */
 async function applyPlacementThenAnnounce(trigger) {
-  let placed = true;
+  let placed = null;
   try {
     if (!placementCheck) throw new Error('no placement check is wired');
     ({ placed } = await placementCheck(trigger));
   } catch (error) {
-    log.warn(`nodeDownService: placement check (${trigger}) failed, announcing: ${error.message}`);
+    log.warn(`nodeDownService: placement check (${trigger}) failed: ${error.message}`);
+  }
+  if (placed === null || placed === undefined) {
+    log.warn(`nodeDownService: placement check (${trigger}) unanswered; announcing nothing, asking again in ${BOOT_STEP_RETRY_MS / 1000}s`);
+    if (!placementRetryTimer) {
+      placementRetryTimer = setTimeout(() => {
+        placementRetryTimer = null;
+        applyPlacementThenAnnounce(trigger).catch((error) => log.warn(`nodeDownService: ${error.message}`));
+      }, BOOT_STEP_RETRY_MS);
+      if (placementRetryTimer.unref) placementRetryTimer.unref();
+    }
+    return;
   }
   // the store has been read: whatever was held back is free to go
   peerNotification.releaseAnnouncements();
-  // placed is null when the rows could not be read: the apps are kept, and so is
-  // the announcement
-  if (placed !== false) {
-    log.info(`nodeDownService: placement check (${trigger}): ${placed ? 'the rows still place this node' : 'the rows could not be read'}, announcing`);
+  if (placed) {
+    log.info(`nodeDownService: placement check (${trigger}): the rows still place this node, announcing`);
     peerNotification.checkAndNotifyPeersOfRunningApps();
   }
   if (trigger !== 'lockout') {
@@ -1011,6 +1026,8 @@ function stop() {
   if (unsubscribeList) unsubscribeList();
   unsubscribeList = null;
   clearIsolationTimer();
+  if (placementRetryTimer) clearTimeout(placementRetryTimer);
+  placementRetryTimer = null;
   if (wasUnreachable) peerNotification.releaseAnnouncements();
   wasUnreachable = false;
   returnNoticed = false;

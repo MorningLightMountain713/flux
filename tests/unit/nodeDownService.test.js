@@ -4,6 +4,7 @@ process.env.NODE_CONFIG_DIR = `${process.cwd()}/tests/unit/globalconfig`;
 
 const { expect } = require('chai');
 const sinon = require('sinon');
+const { BOOT_STEP_RETRY_MS } = require('../../ZelBack/src/services/utils/untilSucceeds');
 const proxyquire = require('proxyquire').noCallThru();
 const { EventEmitter } = require('node:events');
 const log = require('../../ZelBack/src/lib/log');
@@ -283,9 +284,9 @@ describe('nodeDownService', () => {
     service.stop();
   });
 
-  // Nothing here may be the reason an app is deleted: with no check wired, the
-  // node keeps its apps and announces, as it does when the check throws.
-  it('announces when no placement check is wired', async () => {
+  // An unanswered question decides nothing: the apps are kept, and nothing is
+  // announced, since an announcement refutes the certificates and keeps the rows.
+  it('announces nothing, and sends no alive record, while no placement check is wired', async () => {
     const { service, transport, stubs } = makeHarness({ placementCheck: false });
     service.start(transport);
     await tick();
@@ -296,7 +297,8 @@ describe('nodeDownService', () => {
     });
     await tick();
 
-    expect(stubs.announce.callCount).to.equal(1);
+    expect(stubs.announce.callCount).to.equal(0);
+    expect(stubs.storeState.callCount, 'alive records stored').to.equal(0);
     service.stop();
   });
 
@@ -326,20 +328,32 @@ describe('nodeDownService', () => {
     service.stop();
   });
 
-  it('a certificate about THIS node still announces when its rows cannot be read: the apps are kept, and so is the refutation', async () => {
+  it('a certificate about THIS node whose rows cannot be read announces nothing, and asks again until they can', async () => {
+    const clock = sinon.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     const { service, transport, stubs } = makeHarness();
     stubs.enforcePlacement.resolves({ placed: null, removed: [], failed: [] });
     service.start(transport);
     await tick();
+    try {
+      await service.onCertificateBroadcast({
+        certificate: { subject: MY_OUTPOINT, height: 100 },
+        broadcastedAt: Date.now(),
+      });
+      await tick();
+      sinon.assert.calledOnceWithExactly(stubs.enforcePlacement, 'certificate');
+      expect(stubs.announce.callCount, 'apps announced on rows never read').to.equal(0);
+      expect(stubs.storeState.callCount, 'alive records stored on rows never read').to.equal(0);
 
-    await service.onCertificateBroadcast({
-      certificate: { subject: MY_OUTPOINT, height: 100 },
-      broadcastedAt: Date.now(),
-    });
-    await tick();
-    sinon.assert.calledOnceWithExactly(stubs.enforcePlacement, 'certificate');
-    expect(stubs.announce.callCount).to.equal(1);
-    service.stop();
+      stubs.enforcePlacement.resolves({ placed: true, removed: [] });
+      await clock.tickAsync(BOOT_STEP_RETRY_MS);
+      await tick();
+
+      expect(stubs.enforcePlacement.callCount).to.equal(2);
+      expect(stubs.announce.callCount, 'apps announced once the rows place this node').to.equal(1);
+    } finally {
+      service.stop();
+      clock.restore();
+    }
   });
 
   it('a certificate about another node never announces, and a refused one changes nothing', async () => {
