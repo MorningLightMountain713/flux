@@ -127,7 +127,6 @@ describe('appInstaller tests', () => {
         getNumberOfPeers: sinon.stub().returns(15),
         isFirewallActive: sinon.stub().resolves(false),
         allowPort: sinon.stub().resolves({ status: true }),
-        removeDockerContainerAccessToNonRoutable: sinon.stub().resolves(true),
         getLocalSocketAddress: sinon.stub().resolves('192.168.1.1:16127'),
       },
       // Stubbed HERE because proxyquire does not recurse: the install path ensures
@@ -420,7 +419,6 @@ describe('appInstaller tests', () => {
           getNumberOfPeers: sinon.stub().returns(15),
           isFirewallActive: sinon.stub().resolves(false),
           allowPort: sinon.stub().resolves({ status: true }),
-          removeDockerContainerAccessToNonRoutable: sinon.stub().resolves(true),
         },
         '../appNetwork/appDockerNetwork': { ensureAppDockerNetwork },
         './appUninstaller': { uninstallApplication },

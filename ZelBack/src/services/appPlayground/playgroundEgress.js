@@ -8,10 +8,10 @@ const serviceHelper = require('../serviceHelper');
 // kernel's firewall and traffic control, and nothing that talks to docker.
 //
 // Split from playgroundNetwork for a hard reason, not tidiness. fluxNetworkHelper
-// has to restore the DOCKER-USER jump after it flushes that chain, and
-// dockerService requires fluxNetworkHelper - so anything fluxNetworkHelper
-// imports must not reach dockerService or the cycle closes. This module depends
-// on serviceHelper alone, which depends on neither.
+// writes the DOCKER-USER jump into the chain it rebuilds, and dockerService
+// requires fluxNetworkHelper - so anything fluxNetworkHelper imports must not
+// reach dockerService or the cycle closes. This module depends on serviceHelper
+// alone, which depends on neither.
 //
 // Both the policy and the jump are written ONCE, against an interface-name
 // pattern, and never touched per session. That comes from naming the bridges
@@ -40,6 +40,19 @@ async function iptables(params) {
   return serviceHelper.runCommand('iptables', { runAsRoot: true, logError: false, params });
 }
 
+/** The DOCKER-USER rule that sends playground traffic to the playground chain. */
+const egressJumpRule = `-A DOCKER-USER -i ${BRIDGE_MATCH} -j ${CHAIN}`;
+
+/**
+ * Whether the playground chain exists: built on first use, so a node whose
+ * playground was never used has none.
+ * @returns {Promise<boolean>}
+ */
+async function egressChainExists() {
+  const { error } = await iptables(['-nL', CHAIN]);
+  return !error;
+}
+
 async function tc(params) {
   return serviceHelper.runCommand('tc', { runAsRoot: true, logError: false, params });
 }
@@ -48,12 +61,11 @@ async function tc(params) {
  * Build the playground's own egress chain, and hang it off DOCKER-USER.
  *
  * Its own chain rather than rules inside DOCKER-USER, because
- * fluxNetworkHelper.removeDockerContainerAccessToNonRoutable flushes that chain
- * wholesale (`iptables -F DOCKER-USER`) and rebuilds it every time an app
- * network is created - which a playground session itself triggers. Rules placed
- * there would be wiped, possibly by the very next session. A separate chain
- * survives the flush untouched; only the jump has to be re-added, which that
- * function now does.
+ * fluxNetworkHelper.applyContainerEgressRules replaces that chain whole every
+ * time a docker network is created or removed - which a playground session
+ * itself does. Rules placed there would be wiped, possibly by the very next
+ * session. A separate chain is untouched; the jump to it is one of the rules
+ * that replacement writes while the chain exists.
  *
  * Idempotent: the chain is created if absent and always flushed and rewritten,
  * so a partial previous run cannot leave a half-policy in place.
@@ -115,13 +127,9 @@ async function ensureEgressPolicy() {
 }
 
 /**
- * Point DOCKER-USER at the playground chain.
- *
- * Separate from building the chain because it has a second caller: the
- * DOCKER-USER rebuild flushes this jump away along with everything else in that
- * chain, and has to put it back. Inserted at the head so the playground policy
- * is decided before the ordinary app rules get a say — those end in an ACCEPT
- * for traffic between flux interfaces, which would otherwise let a session out.
+ * Point DOCKER-USER at the playground chain, at its head, as the rule
+ * egressJumpRule names: the playground policy is decided before the ordinary
+ * app rules get a say.
  *
  * Idempotent: checked with -C first, since iptables will happily add a
  * duplicate every time it is asked.
@@ -194,6 +202,8 @@ async function shapeBridge(bridge) {
 }
 
 module.exports = {
+  egressJumpRule,
+  egressChainExists,
   CHAIN,
   BRIDGE_PREFIX,
   BRIDGE_MATCH,

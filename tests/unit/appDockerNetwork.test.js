@@ -13,7 +13,6 @@ const makeDockerServiceStub = (overrides = {}) => ({
   dockerNetworkState: sinon.stub().resolves('absent'),
   getFreeFluxAppNetworkOctet: sinon.stub().resolves(1),
   createFluxAppDockerNetwork: sinon.stub().resolves('network-created'),
-  getFluxDockerNetworkPhysicalInterfaceNames: sinon.stub().resolves([]),
   ...overrides,
 });
 
@@ -26,7 +25,6 @@ const DOCKER_SERVICE_API_USED = [
   'dockerNetworkState',
   'getFreeFluxAppNetworkOctet',
   'createFluxAppDockerNetwork',
-  'getFluxDockerNetworkPhysicalInterfaceNames',
   'getFluxDockerNetworks',
   'forceRemoveFluxAppDockerNetwork',
 ];
@@ -34,7 +32,6 @@ const DOCKER_SERVICE_API_USED = [
 describe('appDockerNetwork tests', () => {
   let appDockerNetwork;
   let dockerServiceStub;
-  let removeAccessStub;
 
   it('calls only dockerService functions the real module exports', () => {
     DOCKER_SERVICE_API_USED.forEach((fn) => {
@@ -44,11 +41,9 @@ describe('appDockerNetwork tests', () => {
 
   beforeEach(() => {
     dockerServiceStub = makeDockerServiceStub({ getFreeFluxAppNetworkOctet: sinon.stub().resolves(7) });
-    removeAccessStub = sinon.stub().resolves(true);
     appDockerNetwork = proxyquire('../../ZelBack/src/services/appNetwork/appDockerNetwork', {
       '../serviceHelper': { ensureString: sinon.stub().returnsArg(0) },
       '../dockerService': dockerServiceStub,
-      '../fluxNetworkHelper': { removeDockerContainerAccessToNonRoutable: removeAccessStub },
       '../../lib/log': { info: sinon.stub(), warn: sinon.stub(), error: sinon.stub() },
     });
   });
@@ -57,16 +52,13 @@ describe('appDockerNetwork tests', () => {
     sinon.restore();
   });
 
-  it('returns early (no create, no firewall rebuild) when the network already exists', async () => {
+  it('returns early, creating nothing, when the network already exists', async () => {
     dockerServiceStub.dockerNetworkState.resolves('exists');
 
     const result = await appDockerNetwork.ensureAppDockerNetwork('myapp');
 
     expect(dockerServiceStub.getFreeFluxAppNetworkOctet.called).to.be.false;
     expect(dockerServiceStub.createFluxAppDockerNetwork.called).to.be.false;
-    // intact network: its interface is already in DOCKER-USER, so no iptables churn
-    expect(dockerServiceStub.getFluxDockerNetworkPhysicalInterfaceNames.called).to.be.false;
-    expect(removeAccessStub.called).to.be.false;
     expect(result).to.include('already exists');
   });
 
@@ -78,7 +70,6 @@ describe('appDockerNetwork tests', () => {
     expect(dockerServiceStub.createFluxAppDockerNetwork.calledOnceWithExactly(
       'myapp', 7, { networkName: 'fluxDockerNetwork_myapp' },
     )).to.be.true;
-    expect(removeAccessStub.calledOnce).to.be.true;
   });
 
   it('re-scans for the next free octet when a create collides', async () => {

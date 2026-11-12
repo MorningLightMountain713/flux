@@ -2117,13 +2117,18 @@ const containerBlockedNetworks = NON_PUBLIC_IPV4;
  * No rule uses the physdev match: the kernel loads br_netfilter the first time
  * a physdev rule is added, which sends bridged traffic on every bridge on the
  * host - an operator's VMs included - through iptables.
- * @param {{fluxBridges: string[], dockerBridges: string[]}} bridges fluxBridges:
- *   the bridge of each network FluxOS creates, docker0 aside. dockerBridges: the
- *   bridge of every docker bridge network, docker0 included.
+ *
+ * While the playground chain exists, the chain begins by sending playground
+ * traffic to it, so a session's policy is decided before any rule here.
+ * @param {{fluxBridges: string[], dockerBridges: string[], playground?: boolean}} bridges
+ *   fluxBridges: the bridge of each network FluxOS creates, docker0 aside.
+ *   dockerBridges: the bridge of every docker bridge network, docker0 included.
+ *   playground: the playground chain exists.
  * @returns {string[]}
  */
-function containerEgressRules({ fluxBridges, dockerBridges }) {
-  const rules = ['-A DOCKER-USER -m conntrack --ctstate RELATED,ESTABLISHED -j RETURN'];
+function containerEgressRules({ fluxBridges, dockerBridges, playground = false }) {
+  const rules = playground ? [playgroundEgress.egressJumpRule] : [];
+  rules.push('-A DOCKER-USER -m conntrack --ctstate RELATED,ESTABLISHED -j RETURN');
   ['docker0', ...fluxBridges].forEach((bridge) => {
     rules.push(`-A DOCKER-USER -i ${bridge} -o ${bridge} -j RETURN`);
     rules.push(`-A DOCKER-USER -o ${bridge} -m conntrack --ctstate DNAT -j RETURN`);
@@ -2150,7 +2155,7 @@ function containerEgressRules({ fluxBridges, dockerBridges }) {
  * @returns {Promise<boolean>} True when the chain is in place. Never rejects.
  */
 async function applyContainerEgressRules(bridges) {
-  const desired = containerEgressRules(bridges);
+  const desired = containerEgressRules({ ...bridges, playground: await playgroundEgress.egressChainExists() });
   const { stdout: current, error: readError } = await serviceHelper.runCommand('iptables', {
     runAsRoot: true, logError: false, params: ['-S', 'DOCKER-USER'],
   });
@@ -2286,177 +2291,6 @@ function getNumberOfPeers() {
 }
 
 /**
- * This fix a docker security issue where docker containers can access private node operator networks, for example to create port forwarding on hosts.
- *
- * Docker should create a DOCKER-USER chain. If this doesn't exist - we create it, then jump to this chain immediately from the FORWARD CHAIN.
- * This allows rules to be added via -I (insert) and -A (append) to the DOCKER-USER chain individually, so we can ALWAYS append the
- * drop traffic rule, and insert the ACCEPT rules. If no matches are found in the DOCKER-USER chain, rule evaluation continues
- * from the next rule in the FORWARD chain.
- *
- * If needed in the future, we can actually create a JUMP from the DOCKER-USER chain to a custom chain. The reason why we MUST use the DOCKER-USER
- * chain is that whenever docker creates a new network, it re-jumps the DOCKER-USER chain at the head of the FORWARD chain.
- *
- * As can be seen in this example:
- *
- * Originally, was using the FLUX chain, but you can see docker inserted the br-72d1725e481c network ahead, as well as the JUMP to DOCKER-USER,
- * which invalidates any rules in the FLUX chain, as there is basically an accept any:
- *
- * FORWARD -i br-72d1725e481c ! -o br-72d1725e481c -j ACCEPT
- *
- * ```bash
- * -A INPUT -j ufw-track-input
- * -A FORWARD -j DOCKER-USER
- * -A FORWARD -j DOCKER-ISOLATION-STAGE-1
- * -A FORWARD -o br-72d1725e481c -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
- * -A FORWARD -o br-72d1725e481c -j DOCKER
- * -A FORWARD -i br-72d1725e481c ! -o br-72d1725e481c -j ACCEPT
- * -A FORWARD -i br-72d1725e481c -o br-72d1725e481c -j ACCEPT
- * -A FORWARD -j FLUX
- * -A FORWARD -o br-048fde111132 -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
- * -A FORWARD -o br-048fde111132 -j DOCKER
- * -A FORWARD -i br-048fde111132 ! -o br-048fde111132 -j ACCEPT
- * -A FORWARD -i br-048fde111132 -o br-048fde111132 -j ACCEPT
- *```
- * This means if a user or someone was to delete a single rule, we are able to recover correctly from it.
- *
- * The other option - is just to Flush all rules on every run, and reset them all. This is what we are doing now.
- *
- * @param {string[]} fluxNetworkInterfaces The network interfaces, br-<12 character string>
- * @returns  {Promise<Boolean>}
- */
-async function removeDockerContainerAccessToNonRoutable(fluxNetworkInterfaces) {
-  // Arguments are passed as a list rather than interpolated into a shell string, so the
-  // interfaces and networks never reach a shell. Every call site below reports its own
-  // failure, so runCommand's own error logging is off.
-  const iptables = (params) => serviceHelper.runCommand('iptables', {
-    runAsRoot: true,
-    logError: false,
-    params,
-  });
-
-  const { error: iptablesMissing } = await iptables(['--version']);
-
-  if (iptablesMissing) {
-    log.error('Unable to find iptables binary');
-    return false;
-  }
-
-  // check if rules have been created, as iptables is NOT idempotent.
-  const { error: dockerUserChainMissing } = await iptables(['-L', 'DOCKER-USER']);
-
-  if (dockerUserChainMissing) {
-    const { error: addChainError } = await iptables(['-N', 'DOCKER-USER']);
-    if (addChainError) {
-      log.error('IPTABLES: Error adding DOCKER-USER chain');
-      // if we can't add chain, we can't proceed
-      return false;
-    }
-    log.info('IPTABLES: DOCKER-USER chain created');
-  } else {
-    log.info('IPTABLES: DOCKER-USER chain already created');
-  }
-
-  // iptables 1.8.4 prints nothing on a successful check, so the exit status is what decides
-  const { error: jumpChainMissing } = await iptables(['-C', 'FORWARD', '-j', 'DOCKER-USER']);
-
-  if (jumpChainMissing) {
-    // Ubuntu 20.04 @ iptables 1.8.4 Error: "iptables: No chain/target/match by that name."
-    // Ubuntu 22.04 @ iptables 1.8.7 Error: "iptables: Bad rule (does a matching rule exist in that chain?)."
-    const { error: jumpChainError } = await iptables(['-I', 'FORWARD', '-j', 'DOCKER-USER']);
-    if (jumpChainError) {
-      log.error('IPTABLES: Error inserting FORWARD jump to DOCKER-USER chain');
-      // if we can't jump, we need to bail out
-      return false;
-    }
-    log.info('IPTABLES: New rule in FORWARD inserted to jump to DOCKER-USER chain');
-  } else {
-    log.info('IPTABLES: Jump to DOCKER-USER chain already enabled');
-  }
-
-  const rfc1918Networks = ['10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16'];
-  const fluxSrc = '172.23.0.0/16';
-
-  const dropParams = (dst) => ['-A', 'DOCKER-USER', '-s', fluxSrc, '-d', dst, '-j', 'DROP'];
-  const allowToFluxNetworksParams = (int) => ['-I', 'DOCKER-USER', '-i', int, '-o', int, '-j', 'ACCEPT'];
-  const allowEstablishedParams = (dst) => ['-I', 'DOCKER-USER', '-s', fluxSrc, '-d', dst, '-m', 'state', '--state', 'RELATED,ESTABLISHED', '-j', 'ACCEPT'];
-  const allowDnsParams = (dst) => ['-I', 'DOCKER-USER', '-s', fluxSrc, '-d', dst, '-p', 'udp', '--dport', '53', '-j', 'ACCEPT'];
-
-  const { error: flushError } = await iptables(['-F', 'DOCKER-USER']);
-
-  if (flushError) {
-    log.error(`IPTABLES: Error flushing DOCKER-USER table. ${flushError}`);
-    return false;
-  }
-  log.info('IPTABLES: DOCKER-USER table flushed');
-
-  // add for legacy apps
-  fluxNetworkInterfaces.push('docker0');
-
-  // eslint-disable-next-line no-restricted-syntax
-  for (const int of fluxNetworkInterfaces) {
-    // if this errors, we need to bail, as if the deny succeedes, we may cut off access
-    // eslint-disable-next-line no-await-in-loop
-    const { error: fluxNetworkError } = await iptables(allowToFluxNetworksParams(int));
-    if (fluxNetworkError) {
-      log.error(`IPTABLES: Error allowing traffic on Flux interface ${int}. ${fluxNetworkError}`);
-      return false;
-    }
-    log.info(`IPTABLES: Traffic on Flux interface ${int} accepted`);
-  }
-
-  // eslint-disable-next-line no-restricted-syntax
-  for (const network of rfc1918Networks) {
-    // if any of these error, we need to bail, as if the deny succeedes, we may cut off access
-
-    // eslint-disable-next-line no-await-in-loop
-    const { error: establishedError } = await iptables(allowEstablishedParams(network));
-    if (establishedError) {
-      log.error(`IPTABLES: Error allowing access to Flux containers from ${network}. ${establishedError}`);
-      return false;
-    }
-    log.info(`IPTABLES: Access to Flux containers from ${network} accepted`);
-
-    // eslint-disable-next-line no-await-in-loop
-    const { error: dnsError } = await iptables(allowDnsParams(network));
-    if (dnsError) {
-      log.error(`IPTABLES: Error allowing DNS access to ${network} from Flux containers. ${dnsError}`);
-      return false;
-    }
-    log.info(`IPTABLES: DNS access to ${network} from Flux containers accepted`);
-
-    // This always gets appended, so the drop is at the end
-    // eslint-disable-next-line no-await-in-loop
-    const { error: dropError } = await iptables(dropParams(network));
-    if (dropError) {
-      log.error(`IPTABLES: Error denying access to ${network} from Flux containers. ${dropError}`);
-      return false;
-    }
-    log.info(`IPTABLES: Access to ${network} from Flux containers removed`);
-  }
-
-  const { error: returnError } = await iptables(['-A', 'DOCKER-USER', '-j', 'RETURN']);
-
-  if (returnError) {
-    log.error(`IPTABLES: Error adding explicit return to Forward chain. ${returnError}`);
-    return false;
-  }
-  log.info('IPTABLES: DOCKER-USER explicit return to FORWARD chain added');
-
-  // The flush above destroyed the jump to the playground's egress chain along
-  // with everything else in DOCKER-USER. The chain itself survives - it is a
-  // separate chain for exactly this reason - but without the jump nothing
-  // reaches it, and a live session would silently regain unrestricted egress.
-  // Re-added last so it sits at the head, ahead of the accepts above.
-  const jumped = await playgroundEgress.ensureEgressJump();
-  if (!jumped) {
-    log.error('IPTABLES: playground egress jump could not be restored after the DOCKER-USER rebuild');
-    return false;
-  }
-
-  return true;
-}
-
-/**
  * Allow app containers to reach the mesh resolver (flux-dnsd). Both rules are
  * DESTINATION-scoped to the resolver's address: adjustFirewall deletes the
  * blanket inbound "udp to any port 53" allow on every run, and an unscoped
@@ -2557,7 +2391,6 @@ module.exports = {
   allowNodeToBindPrivilegedPorts,
   applyContainerEgressRules,
   containerEgressRules,
-  removeDockerContainerAccessToNonRoutable,
   allowOnlyDockerNetworksToFluxNodeService,
   allowDockerNetworksToFluxDnsd,
   addFluxNodeServiceIpToLoopback,

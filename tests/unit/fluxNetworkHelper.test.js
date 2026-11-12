@@ -1931,253 +1931,156 @@ describe('fluxNetworkHelper tests', () => {
     });
   });
 
-  describe('remove flux container access to private address space tests', () => {
+  describe('container egress rules tests', () => {
+    const iptablesCall = (params) => sinon.match({ runAsRoot: true, params });
     let runCommandStub;
-    let infoLogSpy;
-    let errorLogSpy;
-
-    // iptables is invoked with an argv list, so the cases below rebuild the readable command
-    // they match on
-    const invocation = (cmd, options) => `${cmd} ${options.params.join(' ')}`;
-    const ok = (stdout = '') => ({ error: null, stdout });
-    const failed = () => ({ error: new Error(), stdout: '' });
-    const chainListing = `Chain DOCKER-USER (0 references)
-          target     prot opt source               destination`;
+    let publishStub;
+    let written;
 
     beforeEach(() => {
-      // hide console output from logs, but still get logging spy
-      sinon.stub(console, 'log');
-      runCommandStub = sinon.stub(serviceHelper, 'runCommand');
-      infoLogSpy = sinon.spy(log, 'info');
-      errorLogSpy = sinon.spy(log, 'error');
+      runCommandStub = sinon.stub(serviceHelper, 'runCommand').resolves({ error: null, stdout: '', stderr: '' });
+      publishStub = sinon.stub(fluxEventBus, 'publish');
+      sinon.stub(fs, 'writeFile').callsFake(async (file, content) => { written = content; });
+      written = null;
+      // No playground chain unless a case builds one.
+      runCommandStub.withArgs('iptables', iptablesCall(['-nL', 'FLUX-PLAYGROUND']))
+        .resolves({ error: new Error('No chain/target/match by that name'), stdout: '', stderr: '' });
     });
 
     afterEach(() => {
       sinon.restore();
     });
 
-    it('should return false if the iptables binary does not exist', async () => {
-      runCommandStub.callsFake(async (cmd, options) => (
-        invocation(cmd, options) === 'iptables --version' ? failed() : ok()));
+    const liveChain = (rules) => runCommandStub.withArgs('iptables', iptablesCall(['-S', 'DOCKER-USER']))
+      .resolves({ error: null, stdout: ['-N DOCKER-USER', ...rules, ''].join('\n'), stderr: '' });
 
-      const result = await fluxNetworkHelper.removeDockerContainerAccessToNonRoutable([]);
-      expect(result).to.eql(false);
-      sinon.assert.calledOnceWithMatch(runCommandStub, 'iptables', { runAsRoot: true, params: ['--version'] });
-      sinon.assert.calledWith(errorLogSpy, 'Unable to find iptables binary');
+    const BRIDGES = { fluxBridges: ['br-aaaaaaaaaaaa', 'br-bbbbbbbbbbbb'], dockerBridges: ['docker0', 'br-aaaaaaaaaaaa', 'br-bbbbbbbbbbbb', 'br-cccccccccccc'] };
+
+    it('matches packets out of a container by the docker bridge they come from, never by source address', () => {
+      const rules = fluxNetworkHelper.containerEgressRules(BRIDGES);
+
+      expect(rules.filter((rule) => / -s /.test(rule))).to.deep.equal([]);
+      ['10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16', '100.64.0.0/10', '169.254.0.0/16', '198.18.0.0/15', '240.0.0.0/4'].forEach((network) => {
+        expect(rules).to.include(`-A DOCKER-USER -d ${network} -i docker0 -j DROP`);
+        expect(rules).to.include(`-A DOCKER-USER -d ${network} -i br-+ -j DROP`);
+      });
     });
 
-    it('should add the DOCKER-USER chain to iptables if it is missing', async () => {
-      runCommandStub.callsFake(async (cmd, options) => {
-        const command = invocation(cmd, options);
-        if (command === 'iptables --version') return ok('iptables v1.8.7 (nf_tables)');
-        // chain doesn't exist
-        if (command === 'iptables -L DOCKER-USER') return failed();
-        return ok();
-      });
+    it('lets traffic into a container through only on docker0 and each FluxOS network, within the network or to a published port', () => {
+      const rules = fluxNetworkHelper.containerEgressRules(BRIDGES);
 
-      const result = await fluxNetworkHelper.removeDockerContainerAccessToNonRoutable([]);
-      expect(result).to.eql(true);
-
-      sinon.assert.calledWithMatch(runCommandStub, 'iptables', { params: ['-L', 'DOCKER-USER'] });
-      sinon.assert.calledWithMatch(runCommandStub, 'iptables', { params: ['-N', 'DOCKER-USER'] });
-      sinon.assert.calledWith(infoLogSpy, 'IPTABLES: DOCKER-USER chain created');
-      sinon.assert.notCalled(errorLogSpy);
+      expect(rules.slice(0, 7)).to.deep.equal([
+        '-A DOCKER-USER -m conntrack --ctstate RELATED,ESTABLISHED -j RETURN',
+        '-A DOCKER-USER -i docker0 -o docker0 -j RETURN',
+        '-A DOCKER-USER -o docker0 -m conntrack --ctstate DNAT -j RETURN',
+        '-A DOCKER-USER -i br-aaaaaaaaaaaa -o br-aaaaaaaaaaaa -j RETURN',
+        '-A DOCKER-USER -o br-aaaaaaaaaaaa -m conntrack --ctstate DNAT -j RETURN',
+        '-A DOCKER-USER -i br-bbbbbbbbbbbb -o br-bbbbbbbbbbbb -j RETURN',
+        '-A DOCKER-USER -o br-bbbbbbbbbbbb -m conntrack --ctstate DNAT -j RETURN',
+      ]);
+      const returnsInto = rules.filter((rule) => / -o /.test(rule) && rule.endsWith('-j RETURN'));
+      expect(returnsInto, 'no exception for a network FluxOS did not create').to.not.satisfy((list) => list.some((rule) => rule.includes('br-cccccccccccc')));
+      expect(rules.filter((rule) => /-d 172\.23\./.test(rule)), 'no exception by address').to.deep.equal([]);
+      expect(rules.filter((rule) => /br-\+/.test(rule) && / -o /.test(rule)), 'no exception by a bridge name pattern').to.deep.equal([]);
     });
 
-    it('should skip addding the DOCKER-USER chain to iptables if it already exists', async () => {
-      runCommandStub.callsFake(async (cmd, options) => {
-        const command = invocation(cmd, options);
-        if (command === 'iptables --version') return ok('iptables v1.8.7 (nf_tables)');
-        if (command === 'iptables -L DOCKER-USER') return ok(chainListing);
-        return ok();
-      });
+    it('drops everything else headed into any docker network, ahead of the DNS exception', () => {
+      const rules = fluxNetworkHelper.containerEgressRules(BRIDGES);
+      const intoDrops = BRIDGES.dockerBridges.map((bridge) => `-A DOCKER-USER -o ${bridge} -j DROP`);
+      const lastException = Math.max(...rules.map((rule, i) => (/conntrack --ctstate DNAT/.test(rule) ? i : -1)));
+      const firstDns = rules.findIndex((rule) => /--dport 53/.test(rule));
 
-      const result = await fluxNetworkHelper.removeDockerContainerAccessToNonRoutable([]);
-
-      expect(result).to.eql(true);
-      sinon.assert.calledWithMatch(runCommandStub, 'iptables', { params: ['-L', 'DOCKER-USER'] });
-      sinon.assert.neverCalledWithMatch(runCommandStub, 'iptables', { params: ['-N', 'DOCKER-USER'] });
-      sinon.assert.calledWith(infoLogSpy, 'IPTABLES: DOCKER-USER chain already created');
-      sinon.assert.notCalled(errorLogSpy);
+      expect(rules.slice(lastException + 1, lastException + 1 + intoDrops.length)).to.deep.equal(intoDrops);
+      expect(firstDns).to.be.above(lastException + intoDrops.length);
     });
 
-    it('should bail out if there is an error addding the DOCKER-USER chain to iptables', async () => {
-      runCommandStub.callsFake(async (cmd, options) => {
-        const command = invocation(cmd, options);
-        if (command === 'iptables --version') return ok('iptables v1.8.7 (nf_tables)');
-        // fail for both -L and -N (failing on -L is normal)
-        return failed();
-      });
+    it('returns DNS from any container before the non-public drops, uses no physdev match, and ends by returning', () => {
+      const rules = fluxNetworkHelper.containerEgressRules(BRIDGES);
+      const firstRangeDrop = rules.findIndex((rule) => / -d /.test(rule) && rule.endsWith('-j DROP'));
 
-      const result = await fluxNetworkHelper.removeDockerContainerAccessToNonRoutable([]);
-
-      expect(result).to.eql(false);
-      sinon.assert.calledWithMatch(runCommandStub, 'iptables', { params: ['-L', 'DOCKER-USER'] });
-      sinon.assert.calledWithMatch(runCommandStub, 'iptables', { params: ['-N', 'DOCKER-USER'] });
-      sinon.assert.notCalled(infoLogSpy);
-      sinon.assert.calledOnceWithExactly(errorLogSpy, 'IPTABLES: Error adding DOCKER-USER chain');
+      ['docker0', 'br-+'].forEach((bridge) => ['udp', 'tcp'].forEach((proto) => {
+        expect(rules.indexOf(`-A DOCKER-USER -i ${bridge} -p ${proto} -m ${proto} --dport 53 -j RETURN`)).to.be.within(0, firstRangeDrop);
+      }));
+      expect(rules.filter((rule) => /physdev/.test(rule))).to.deep.equal([]);
+      expect(rules[rules.length - 1]).to.equal('-A DOCKER-USER -j RETURN');
     });
 
-    it('should add the jump to DOCKER-USER chain from FORWARD chain to iptables if it is missing', async () => {
-      runCommandStub.callsFake(async (cmd, options) => {
-        const command = invocation(cmd, options);
-        if (command === 'iptables --version') return ok('iptables v1.8.7 (nf_tables)');
-        if (command === 'iptables -L DOCKER-USER') return ok(chainListing);
-        if (command === 'iptables -C FORWARD -j DOCKER-USER') {
-          return { error: new Error('iptables: Bad rule (does a matching rule exist in that chain?).'), stdout: '' };
-        }
-        return ok();
-      });
+    it('names only docker0 when FluxOS has no network yet', () => {
+      const rules = fluxNetworkHelper.containerEgressRules({ fluxBridges: [], dockerBridges: ['docker0'] });
 
-      const result = await fluxNetworkHelper.removeDockerContainerAccessToNonRoutable([]);
-
-      expect(result).to.eql(true);
-      sinon.assert.calledWithMatch(runCommandStub, 'iptables', { params: ['-C', 'FORWARD', '-j', 'DOCKER-USER'] });
-      sinon.assert.calledWithMatch(runCommandStub, 'iptables', { params: ['-I', 'FORWARD', '-j', 'DOCKER-USER'] });
-
-      sinon.assert.calledWith(infoLogSpy, 'IPTABLES: New rule in FORWARD inserted to jump to DOCKER-USER chain');
-      sinon.assert.notCalled(errorLogSpy);
+      expect(rules.slice(0, 4)).to.deep.equal([
+        '-A DOCKER-USER -m conntrack --ctstate RELATED,ESTABLISHED -j RETURN',
+        '-A DOCKER-USER -i docker0 -o docker0 -j RETURN',
+        '-A DOCKER-USER -o docker0 -m conntrack --ctstate DNAT -j RETURN',
+        '-A DOCKER-USER -o docker0 -j DROP',
+      ]);
     });
 
-    it('should skip adding the jump to DOCKER-USER chain from FORWARD chain to iptables if it already exists', async () => {
-      runCommandStub.callsFake(async (cmd, options) => {
-        const command = invocation(cmd, options);
-        if (command === 'iptables --version') return ok('iptables v1.8.7 (nf_tables)');
-        if (command === 'iptables -L DOCKER-USER') return ok(chainListing);
-        return ok();
-      });
+    it('replaces the whole chain in one iptables-restore when it differs', async () => {
+      liveChain(['-A DOCKER-USER -s 172.23.0.0/16 -d 10.0.0.0/8 -j DROP']);
 
-      const result = await fluxNetworkHelper.removeDockerContainerAccessToNonRoutable([]);
+      const res = await fluxNetworkHelper.applyContainerEgressRules(BRIDGES);
 
-      expect(result).to.eql(true);
-      sinon.assert.neverCalledWithMatch(runCommandStub, 'iptables', { params: ['-I', 'FORWARD', '-j', 'DOCKER-USER'] });
-
-      sinon.assert.calledWith(infoLogSpy, 'IPTABLES: Jump to DOCKER-USER chain already enabled');
-      sinon.assert.notCalled(errorLogSpy);
+      expect(res).to.equal(true);
+      sinon.assert.calledWith(runCommandStub, 'iptables-restore', sinon.match({ runAsRoot: true, params: sinon.match.array.startsWith(['--noflush']) }));
+      expect(written.split('\n')).to.deep.equal(['*filter', ':DOCKER-USER - [0:0]', ...fluxNetworkHelper.containerEgressRules(BRIDGES), 'COMMIT', '']);
+      sinon.assert.calledOnceWithExactly(publishStub, 'firewall:containerEgressApplied', {});
     });
 
-    it('should bail out if there is an error adding the jump to the DOCKER-USER chain', async () => {
-      runCommandStub.callsFake(async (cmd, options) => {
-        const command = invocation(cmd, options);
-        if (command === 'iptables --version') return ok('iptables v1.8.7 (nf_tables)');
-        if (command === 'iptables -L DOCKER-USER') return ok(chainListing);
-        if (command === 'iptables -C FORWARD -j DOCKER-USER') {
-          return { error: new Error('iptables: Bad rule (does a matching rule exist in that chain?).'), stdout: '' };
-        }
-        return failed();
-      });
+    it('writes nothing when the chain already matches', async () => {
+      liveChain(fluxNetworkHelper.containerEgressRules(BRIDGES));
 
-      const result = await fluxNetworkHelper.removeDockerContainerAccessToNonRoutable([]);
+      const res = await fluxNetworkHelper.applyContainerEgressRules(BRIDGES);
 
-      expect(result).to.eql(false);
-      sinon.assert.calledWithMatch(runCommandStub, 'iptables', { params: ['-C', 'FORWARD', '-j', 'DOCKER-USER'] });
-      sinon.assert.calledWithMatch(runCommandStub, 'iptables', { params: ['-I', 'FORWARD', '-j', 'DOCKER-USER'] });
-
-      sinon.assert.neverCalledWith(infoLogSpy, 'IPTABLES: New rule in FORWARD inserted to jump to DOCKER-USER chain');
-      expect(infoLogSpy.callCount).to.eql(1);
-      sinon.assert.calledOnceWithExactly(errorLogSpy, 'IPTABLES: Error inserting FORWARD jump to DOCKER-USER chain');
+      expect(res).to.equal(true);
+      sinon.assert.neverCalledWith(runCommandStub, 'iptables-restore');
+      sinon.assert.notCalled(publishStub);
     });
 
-    it('should flush the DOCKER-USER chain', async () => {
-      runCommandStub.callsFake(async (cmd, options) => {
-        const command = invocation(cmd, options);
-        if (command === 'iptables --version') return ok('iptables v1.8.7 (nf_tables)');
-        if (command === 'iptables -L DOCKER-USER') return ok(chainListing);
-        return ok();
-      });
+    it('reports failure when the restore fails', async () => {
+      runCommandStub.withArgs('iptables-restore').resolves({ error: new Error('restore failed'), stdout: '', stderr: '' });
 
-      const result = await fluxNetworkHelper.removeDockerContainerAccessToNonRoutable([]);
+      const res = await fluxNetworkHelper.applyContainerEgressRules(BRIDGES);
 
-      expect(result).to.eql(true);
-      sinon.assert.calledWithMatch(runCommandStub, 'iptables', { params: ['-F', 'DOCKER-USER'] });
-      sinon.assert.notCalled(errorLogSpy);
+      expect(res).to.equal(false);
+      sinon.assert.notCalled(publishStub);
     });
 
-    it('should bail out if there is an error flushing the DOCKER-USER chain', async () => {
-      runCommandStub.callsFake(async (cmd, options) => {
-        const command = invocation(cmd, options);
-        if (command === 'iptables --version') return ok('iptables v1.8.7 (nf_tables)');
-        if (command === 'iptables -L DOCKER-USER') return ok(chainListing);
-        if (command === 'iptables -C FORWARD -j DOCKER-USER') return ok();
-        return failed();
-      });
+    it('reports failure, not a rejection, when the rules file cannot be written', async () => {
+      fs.writeFile.rejects(new Error('ENOSPC'));
 
-      const result = await fluxNetworkHelper.removeDockerContainerAccessToNonRoutable([]);
+      const res = await fluxNetworkHelper.applyContainerEgressRules(BRIDGES);
 
-      expect(result).to.eql(false);
-      sinon.assert.calledWithMatch(runCommandStub, 'iptables', { params: ['-F', 'DOCKER-USER'] });
-      sinon.assert.calledOnceWithExactly(errorLogSpy, 'IPTABLES: Error flushing DOCKER-USER table. Error');
-      expect(runCommandStub.callCount).to.eql(4);
+      expect(res).to.equal(false);
+      sinon.assert.neverCalledWith(runCommandStub, 'iptables-restore');
+      sinon.assert.notCalled(publishStub);
     });
 
-    it('should add two allow and one drop rule for each private network', async () => {
-      const networks = ['10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16'];
+    it('puts back a missing FORWARD jump to DOCKER-USER, and only then', async () => {
+      liveChain(fluxNetworkHelper.containerEgressRules(BRIDGES));
+      runCommandStub.withArgs('iptables', iptablesCall(['-C', 'FORWARD', '-j', 'DOCKER-USER'])).resolves({ error: new Error('missing'), stdout: '', stderr: '' });
 
-      runCommandStub.callsFake(async (cmd, options) => {
-        const command = invocation(cmd, options);
-        if (command === 'iptables --version') return ok('iptables v1.8.7 (nf_tables)');
-        if (command === 'iptables -L DOCKER-USER') return ok(chainListing);
-        return ok();
-      });
+      await fluxNetworkHelper.applyContainerEgressRules(BRIDGES);
+      sinon.assert.calledWith(runCommandStub, 'iptables', iptablesCall(['-I', 'FORWARD', '-j', 'DOCKER-USER']));
 
-      const result = await fluxNetworkHelper.removeDockerContainerAccessToNonRoutable([]);
-
-      expect(result).to.eql(true);
-
-      // eslint-disable-next-line no-restricted-syntax
-      for (const network of networks) {
-        sinon.assert.calledWithMatch(runCommandStub, 'iptables', { params: ['-I', 'DOCKER-USER', '-s', '172.23.0.0/16', '-d', network, '-p', 'udp', '--dport', '53', '-j', 'ACCEPT'] });
-        sinon.assert.calledWithMatch(runCommandStub, 'iptables', { params: ['-I', 'DOCKER-USER', '-s', '172.23.0.0/16', '-d', network, '-m', 'state', '--state', 'RELATED,ESTABLISHED', '-j', 'ACCEPT'] });
-        sinon.assert.calledWithMatch(runCommandStub, 'iptables', { params: ['-A', 'DOCKER-USER', '-s', '172.23.0.0/16', '-d', network, '-j', 'DROP'] });
-      }
-
-      // 2 for the CHAIN rules, 1 FLUSH, 1 docker0 allow, 9 for the adds and 1 for the RETURN
-      expect(infoLogSpy.callCount).to.eql(14);
-      sinon.assert.notCalled(errorLogSpy);
+      runCommandStub.resetHistory();
+      runCommandStub.withArgs('iptables', iptablesCall(['-C', 'FORWARD', '-j', 'DOCKER-USER'])).resolves({ error: null, stdout: '', stderr: '' });
+      await fluxNetworkHelper.applyContainerEgressRules(BRIDGES);
+      sinon.assert.neverCalledWith(runCommandStub, 'iptables', iptablesCall(['-I', 'FORWARD', '-j', 'DOCKER-USER']));
     });
 
-    it('should add an allow for intra-network traffic per docker network', async () => {
-      const interfaces = ['br-aaf87aa57b20', 'br-098bac43a7f1'];
+    it('sends playground traffic to its own chain first while that chain exists', async () => {
+      runCommandStub.withArgs('iptables', iptablesCall(['-nL', 'FLUX-PLAYGROUND'])).resolves({ error: null, stdout: '', stderr: '' });
+      liveChain(fluxNetworkHelper.containerEgressRules(BRIDGES));
 
-      runCommandStub.callsFake(async (cmd, options) => {
-        const command = invocation(cmd, options);
-        if (command === 'iptables --version') return ok('iptables v1.8.7 (nf_tables)');
-        if (command === 'iptables -L DOCKER-USER') return ok(chainListing);
-        return ok();
-      });
+      const res = await fluxNetworkHelper.applyContainerEgressRules(BRIDGES);
 
-      const result = await fluxNetworkHelper.removeDockerContainerAccessToNonRoutable(interfaces);
-
-      expect(result).to.eql(true);
-
-      // eslint-disable-next-line no-restricted-syntax
-      for (const int of interfaces) {
-        sinon.assert.calledWithMatch(runCommandStub, 'iptables', { params: ['-I', 'DOCKER-USER', '-i', int, '-o', int, '-j', 'ACCEPT'] });
-      }
-      sinon.assert.calledWithMatch(runCommandStub, 'iptables', { params: ['-I', 'DOCKER-USER', '-i', 'docker0', '-o', 'docker0', '-j', 'ACCEPT'] });
-
-      // 2 for the CHAIN rules, 1 FLUSH, 1 docker0 allow, 2 interface allows, 9 for the adds and 1 for the RETURN
-      expect(infoLogSpy.callCount).to.eql(16);
-      sinon.assert.notCalled(errorLogSpy);
-    });
-
-    it('should bail out as soon as a rule errors out', async () => {
-      runCommandStub.callsFake(async (cmd, options) => {
-        const command = invocation(cmd, options);
-        if (command === 'iptables --version') return ok('iptables v1.8.7 (nf_tables)');
-        if (command === 'iptables -L DOCKER-USER') return ok(chainListing);
-        if (command === 'iptables -C FORWARD -j DOCKER-USER') return ok();
-        // this is the rule under test
-        if (command === 'iptables -I DOCKER-USER -i docker0 -o docker0 -j ACCEPT') return failed();
-        return ok();
-      });
-
-      const result = await fluxNetworkHelper.removeDockerContainerAccessToNonRoutable([]);
-
-      expect(result).to.eql(false);
-      expect(runCommandStub.callCount).to.eql(5);
-
-      sinon.assert.calledOnceWithExactly(errorLogSpy, 'IPTABLES: Error allowing traffic on Flux interface docker0. Error');
+      expect(res).to.equal(true);
+      expect(written.split('\n').slice(0, 4)).to.deep.equal([
+        '*filter', ':DOCKER-USER - [0:0]',
+        '-A DOCKER-USER -i flxpg+ -j FLUX-PLAYGROUND',
+        '-A DOCKER-USER -m conntrack --ctstate RELATED,ESTABLISHED -j RETURN',
+      ]);
     });
   });
 

@@ -1,7 +1,6 @@
 'use strict';
 
 const dockerService = require('../dockerService');
-const fluxNetworkHelper = require('../fluxNetworkHelper');
 const serviceHelper = require('../serviceHelper');
 const log = require('../../lib/log');
 const { getSpecBackend } = require('../utils/specLibs');
@@ -36,12 +35,9 @@ const legacyPinnedOctets = appsThatMightBeUsingOldGatewayIpAssignment.map((name)
  * where a pruned network (docker prune, daemon restart) must be re-created
  * before any container can be re-created onto it.
  *
- * When the network already exists this returns EARLY - no allocation and,
- * crucially, no firewall work: its interface is already in the node-wide
- * DOCKER-USER rules, so re-running removeDockerContainerAccessToNonRoutable
- * here would flush and rebuild the whole chain on every heal recreate for no
- * gain (briefly dropping RFC1918 protection for every flux container on the
- * node).
+ * When the network already exists this returns EARLY, with no allocation.
+ * Creating a network applies the container firewall with its bridge
+ * (dockerService.dockerCreateNetwork).
  *
  * Allocation is deterministic (lowest free octet) but collision-safe: many heals
  * can run concurrently after a mass prune, so a create that loses its octet to
@@ -97,14 +93,7 @@ async function ensureAppDockerNetwork(appName, { onStatus = null, networkName = 
   }
   log.info(serviceHelper.ensureString(fluxNet));
 
-  const fluxNetworkInterfaces = await dockerService.getFluxDockerNetworkPhysicalInterfaceNames();
-  const accessRemoved = await fluxNetworkHelper.removeDockerContainerAccessToNonRoutable(fluxNetworkInterfaces);
-  if (onStatus) {
-    onStatus({
-      status: accessRemoved ? `Private network access removed for ${appName}` : `Error removing private network access for ${appName}`,
-    });
-    onStatus({ status: `Docker network of ${appName} initiated.` });
-  }
+  if (onStatus) onStatus({ status: `Docker network of ${appName} initiated.` });
   return fluxNet;
 }
 

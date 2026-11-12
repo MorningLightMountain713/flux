@@ -3030,22 +3030,6 @@ async function migrateContainerRestartPolicies() {
   }
 }
 
-/**
- *
- * @returns {Promise<string[]>}
- */
-async function getFluxDockerNetworkPhysicalInterfaceNames() {
-  const fluxNetworks = await getFluxDockerNetworks();
-
-  const interfaceNames = fluxNetworks.map((network) => {
-    // the physical interface name is br-<first 12 chars of Id>
-    const intName = `br-${network.Id.slice(0, 12)}`;
-    return intName;
-  });
-
-  return interfaceNames;
-}
-
 module.exports = {
   appDockerCreate,
   appDockerUpdateCpu,
@@ -3107,7 +3091,6 @@ module.exports = {
   getDockerContainerHandle,
   getFluxDockerNetworks,
   dockerListNetworksByLabel,
-  getFluxDockerNetworkPhysicalInterfaceNames,
   getFluxDockerNetworkSubnets,
   getFreeFluxAppNetworkOctet,
   migrateContainerRestartPolicies,
